@@ -44,7 +44,27 @@ jobs:
           PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           TEAM: ${{ secrets.APPLE_TEAM_ID }}
       - run: npx tauri build --target universal-apple-darwin
+      - name: Launch test
+        run: |
+          app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Ohmlet.app
+          codesign --verify --deep --verbose=2 "$app"
+          "$app/Contents/MacOS/ohmlet" > launch.log 2>&1 &
+          pid=$!
+          sleep 20
+          screencapture -x launch.png || true
+          cat launch.log
+          kill -0 "$pid"
+          kill "$pid"
       - uses: actions/upload-artifact@v4
         with:
           name: Ohmlet-macOS
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-details
+          path: |
+            launch.png
+            launch.log
+            src-tauri/Cargo.lock
+          if-no-files-found: warn
