@@ -1,0 +1,50 @@
+name: Build macOS app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      HAS_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # Signing and notarization run when the certificate secret is set. Without it the build is
+      # unsigned, and macOS will warn people who download it. Tauri treats a variable that is set
+      # but empty as a request to sign, so these are only set when there is a certificate.
+      - name: Enable signing
+        if: ${{ env.HAS_CERTIFICATE == 'true' }}
+        # Base64 tools often wrap their output, and a line break would break GITHUB_ENV.
+        run: |
+          add() { if [ -n "$2" ]; then echo "$1=$(printf '%s' "$2" | tr -d '\r\n')" >> "$GITHUB_ENV"; fi; }
+          add APPLE_CERTIFICATE "$CERT"
+          add APPLE_CERTIFICATE_PASSWORD "$CERT_PASSWORD"
+          add APPLE_SIGNING_IDENTITY "$IDENTITY"
+          add APPLE_ID "$ID"
+          add APPLE_PASSWORD "$PASSWORD"
+          add APPLE_TEAM_ID "$TEAM"
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          ID: ${{ secrets.APPLE_ID }}
+          PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+      - run: npx tauri build --target universal-apple-darwin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ohmlet-macOS
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
