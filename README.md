@@ -68,8 +68,7 @@ The assistant needs an Anthropic API key, entered in its Settings. The key is ke
 
 ## Before a public release
 
-- Build and test on a real Mac. The native shell has not yet been compiled.
-- Commit `src-tauri/Cargo.lock` after the first build.
-- Add an Apple Developer ID. The workflow reads the `APPLE_*` secrets it needs for signing and notarization.
+- Test by hand on a real Mac. The app builds and launches on GitHub's macOS runner, but that's no substitute for someone using it.
+- Add an Apple Developer ID. The workflow reads the `APPLE_*` secrets it needs for signing and notarization. Until then builds are only ad-hoc signed, so macOS warns people who download them. To open one anyway, right-click the app and choose Open, or if macOS says it's damaged, run `xattr -cr /Applications/Ohmlet.app`.
 - Have counsel review `.ms14` support and `docs/ms14-format.md` against the vendor's license terms, how close the interface is to Multisim's, and vendor model text being stored in saved files and sent to the assistant.
 - Choose a license for this project, and add third-party notices for its dependencies.

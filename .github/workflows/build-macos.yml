@@ -52,6 +52,19 @@ jobs:
           pid=$!
           sleep 20
           screencapture -x launch.png || true
+          # Use the real menus to open an example and run it, which exercises the native menu
+          # and the simulation worker under the macOS webview. Runners may refuse UI scripting,
+          # so a refusal is reported in the log and doesn't fail the build.
+          proc=$(osascript -e 'tell application "System Events" to get name of first process whose unix id is '"$pid" 2>> launch.log) || true
+          echo "process: $proc" >> launch.log
+          osascript -e "tell application \"System Events\" to tell process \"$proc\"" \
+            -e 'set frontmost to true' \
+            -e 'click menu item "RC low-pass filter" of menu "Examples" of menu bar 1' \
+            -e 'delay 2' \
+            -e 'click menu item "Run" of menu "Simulate" of menu bar 1' \
+            -e 'end tell' >> launch.log 2>&1 || echo "menu scripting failed" >> launch.log
+          sleep 12
+          screencapture -x running.png || true
           cat launch.log
           kill -0 "$pid"
           kill "$pid"
@@ -65,6 +78,7 @@ jobs:
           name: build-details
           path: |
             launch.png
+            running.png
             launch.log
             src-tauri/Cargo.lock
           if-no-files-found: warn
