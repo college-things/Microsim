@@ -1,6 +1,7 @@
 // Holds the latest samples of a continuous run in a fixed amount of memory.
 import type { SimResult } from "../core/sim";
 import type { LiveCommand } from "./worker";
+import { NO_WORKER, spawnWorker } from "./spawn";
 
 /** Keeps the newest samples. When full it discards the older half, so memory stays bounded. */
 export class LiveBuffer {
@@ -68,7 +69,7 @@ export class LiveRun {
   private updates = new Map<number, (applied: boolean) => void>();
 
   constructor(netlist: string, keep: string[], rate: number | undefined, stopAt: number | undefined, callbacks: LiveCallbacks) {
-    this.worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+    this.worker = spawnWorker();
     const send = (message: LiveCommand) => this.worker.postMessage(message);
     this.worker.onmessage = (event) => {
       if (this.stopped) return;
@@ -94,7 +95,7 @@ export class LiveRun {
     this.worker.onerror = (event) => {
       if (this.stopped) return;
       this.stop();
-      callbacks.onError(event.message || "The simulation stopped unexpectedly.");
+      callbacks.onError(event.message || NO_WORKER);
     };
     send({ type: "start", netlist, keep, rate, stopAt });
   }

@@ -1,7 +1,6 @@
 // Text exports: schematic as SVG, plot data as CSV.
-import { PART_BY_KIND } from "./library";
-import { pinWorld } from "./netlist";
-import type { Graphic, SchComponent, Schematic } from "./schematic";
+import { junctions, pinWorld, placedBounds, shownValue, symbolGraphics } from "./netlist";
+import type { Graphic, Schematic } from "./schematic";
 import type { SimResult } from "./sim";
 
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -18,9 +17,8 @@ function shape(g: Graphic): string {
   }
 }
 
-function graphicsOf(comp: SchComponent): Graphic[] {
-  return comp.graphics ?? PART_BY_KIND.get(comp.kind)?.graphics ?? [];
-}
+// Text widths can't be measured here, so this errs wide, to keep every letter inside the picture.
+const textWidth = (text: string, size = 10) => text.length * size * 0.65;
 
 export function schematicToSvg(doc: Schematic): string {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
@@ -32,34 +30,55 @@ export function schematicToSvg(doc: Schematic): string {
     wire.points.forEach((p) => add(p.x, p.y));
     body.push(`<polyline points="${wire.points.map((p) => `${Number(p.x)},${Number(p.y)}`).join(" ")}" fill="none" stroke="#c92a2a"/>`);
   }
+  for (const { x, y } of junctions(doc)) body.push(`<circle cx="${Number(x)}" cy="${Number(y)}" r="2.6" fill="#c92a2a"/>`);
   for (const comp of doc.components) {
-    comp.pins.forEach((pin) => {
-      const at = pinWorld(comp, pin);
-      add(at.x, at.y);
-    });
-    add(comp.x - 40, comp.y - 40);
-    add(comp.x + 40, comp.y + 40);
-    const mirror = comp.mirrored ? " scale(-1,1)" : "";
-    body.push(`<g transform="translate(${Number(comp.x)},${Number(comp.y)}) rotate(${Number(comp.rotation)})${mirror}" stroke="#1c4e80">${graphicsOf(comp).map(shape).join("")}</g>`);
-    if (comp.refDes && comp.kind !== "ground") {
-      body.push(`<text x="${Number(comp.x)}" y="${comp.y - 34}" font-size="10" text-anchor="middle">${escape(comp.refDes)}</text>`);
+    const b = placedBounds(comp);
+    add(b.x0, b.y0);
+    add(b.x1, b.y1);
+    const graphics = symbolGraphics(comp);
+    for (const g of graphics) {
+      if (g.kind !== "text") continue;
+      const half = textWidth(g.text, g.size) / 2;
+      for (const corner of [{ x: g.x - half, y: g.y - g.size }, { x: g.x + half, y: g.y + g.size }]) {
+        const at = pinWorld(comp, corner);
+        add(at.x, at.y);
+      }
     }
+    const mirror = comp.mirrored ? " scale(-1,1)" : "";
+    body.push(`<g transform="translate(${Number(comp.x)},${Number(comp.y)}) rotate(${Number(comp.rotation)})${mirror}" stroke="#1c4e80">${graphics.map(shape).join("")}</g>`);
+    if (!comp.refDes || comp.kind === "ground") continue;
+    // As on the sheet: the name above the part's box and the value below it.
+    const center = (b.x0 + b.x1) / 2;
+    const label = (text: string, top: number) => {
+      const half = textWidth(text) / 2;
+      add(center - half, top);
+      add(center + half, top + 12);
+      body.push(`<text x="${center}" y="${top + 9}" font-size="10" text-anchor="middle">${escape(text)}</text>`);
+    };
+    label(comp.refDes, b.y0 - 14);
+    const value = shownValue(comp);
+    if (value) label(value, b.y1 + 2);
   }
   for (const label of doc.labels) {
     if (label.hidden) continue;
     add(label.x, label.y);
-    body.push(`<text x="${label.x + 4}" y="${label.y - 6}" font-size="10" fill="#0b7285">${escape(label.net)}</text>`);
+    add(label.x + 4 + textWidth(label.net), label.y - 14);
+    body.push(`<circle cx="${Number(label.x)}" cy="${Number(label.y)}" r="2" fill="#0b7285"/>`);
+    body.push(`<text x="${label.x + 4}" y="${label.y - 4}" font-size="10" fill="#0b7285">${escape(label.net)}</text>`);
   }
   for (const note of doc.texts) {
-    add(note.x, note.y);
-    note.text.split("\n").forEach((row, i) => {
-      body.push(`<text x="${Number(note.x)}" y="${note.y + i * 12}" font-size="10">${escape(row)}</text>`);
+    const rows = note.text.split("\n");
+    add(note.x, note.y - 8);
+    add(note.x + Math.max(...rows.map((row) => textWidth(row))), note.y + rows.length * 12);
+    rows.forEach((row, i) => {
+      body.push(`<text x="${Number(note.x)}" y="${note.y + i * 12 + 3.5}" font-size="10" xml:space="preserve">${escape(row)}</text>`);
     });
   }
   if (!Number.isFinite(x0)) { x0 = y0 = 0; x1 = y1 = 100; }
   const pad = 20;
-  const box = `${x0 - pad} ${y0 - pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${box}" font-family="Helvetica, Arial, sans-serif" stroke-width="1.3"><rect x="${x0 - pad}" y="${y0 - pad}" width="100%" height="100%" fill="#fff"/>${body.join("")}</svg>\n`;
+  const width = x1 - x0 + 2 * pad;
+  const height = y1 - y0 + 2 * pad;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${x0 - pad} ${y0 - pad} ${width} ${height}" font-family="Helvetica, Arial, sans-serif" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="${x0 - pad}" y="${y0 - pad}" width="${width}" height="${height}" fill="#fff"/>${body.join("")}</svg>\n`;
 }
 
 const csvCell = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);

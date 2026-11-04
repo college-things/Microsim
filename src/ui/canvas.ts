@@ -1,24 +1,82 @@
 // Schematic workspace: drawing, selection, placement and wiring.
-import { newId, route, simplify, type Clipboard, type Doc } from "../core/doc";
+import { newId, PartMove, route, simplify, type Clipboard, type Doc } from "../core/doc";
 import { PART_BY_KIND } from "../core/library";
-import { connectivitySignature, pinWorld } from "../core/netlist";
+import { junctions, pinWorld, placedBounds, pointKey, shownValue, symbolBounds, symbolGraphics } from "../core/netlist";
 import type { PartDisplay } from "../core/indicators";
-import type { Graphic, NetLabel, Point, SchComponent, Wire } from "../core/schematic";
+import type { Point, SchComponent, Wire } from "../core/schematic";
+import { isMac } from "./platform";
 
 const GRID = 10;
 const snap = (v: number) => Math.round(v / GRID) * GRID;
 
+/** A Mac's Ctrl+click means right-click, though it arrives as the main button. */
+export const isSecondaryClick = (e: Pick<MouseEvent, "button" | "ctrlKey">, mac: boolean) =>
+  e.button === 2 || (mac && e.button === 0 && e.ctrlKey);
+
+/** What a scroll does to the view: a zoom factor, or a distance to pan in pixels. */
+export function wheelAction(
+  e: Pick<WheelEvent, "deltaMode" | "deltaX" | "deltaY" | "ctrlKey" | "metaKey">,
+  mac: boolean,
+): { zoom: number } | { panX: number; panY: number } {
+  const unit = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 400 : 1;
+  // A mouse wheel moves in whole notches, while a trackpad scrolls in small mixed steps. On a
+  // Mac a hard swipe looks just like a notch, so there only Ctrl, Cmd or a pinch zooms.
+  const notched = !mac && (e.deltaMode === 1 || (e.deltaX === 0 && Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 100));
+  if (e.ctrlKey || e.metaKey || notched) {
+    // A pinch sends small steps, which this leaves alone. A notch or a hard swipe gets one gentle step.
+    return { zoom: Math.exp(-Math.max(-20, Math.min(20, e.deltaY * unit)) * 0.01) };
+  }
+  return { panX: e.deltaX * unit, panY: e.deltaY * unit };
+}
+
+/** The point on the nearest wire within reach, exactly on it so that a wire or label ending there joins it. */
+export function pointOnWires(wires: Wire[], p: Point, reach: number): Point | undefined {
+  let best: Point | undefined;
+  let bestDistance = reach;
+  for (const wire of wires) {
+    for (let i = 1; i < wire.points.length; i++) {
+      const a = wire.points[i - 1];
+      const b = wire.points[i];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const along = Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+      const near = { x: a.x + along * dx, y: a.y + along * dy };
+      const distance = Math.hypot(near.x - p.x, near.y - p.y);
+      if (distance > bestDistance) continue;
+      bestDistance = distance;
+      best = settleOnRun(near, a, b);
+    }
+  }
+  return best;
+}
+
+/** Moves a point on a run to the grid where that keeps it on the run. */
+function settleOnRun(near: Point, a: Point, b: Point): Point {
+  const within = (v: number, p: number, q: number) => Math.min(Math.max(v, Math.min(p, q)), Math.max(p, q));
+  if (a.y === b.y) return { x: within(snap(near.x), a.x, b.x), y: a.y };
+  if (a.x === b.x) return { x: a.x, y: within(snap(near.y), a.y, b.y) };
+  // Few grid points lie on a slanted wire. Rounding to another would step off it and connect nothing.
+  const grid = { x: snap(near.x), y: snap(near.y) };
+  const onRun = (b.x - a.x) * (grid.y - a.y) === (b.y - a.y) * (grid.x - a.x)
+    && within(grid.x, a.x, b.x) === grid.x && within(grid.y, a.y, b.y) === grid.y;
+  return onRun ? grid : near;
+}
+
 interface Drag {
   kind: "move" | "pan" | "box";
+  /** The pointer doing this, as a second finger can come down during it. */
+  pointer: number;
   start: Point;
   last: Point;
-  /** Wire endpoints that follow moved pins. */
-  stretch?: { wire: Wire; end: "first" | "last"; comp: SchComponent }[];
-  moved?: boolean;
-  labels?: NetLabel[];
-  /** Connections when the drag began, to warn if the move changes them. */
-  signature?: string;
+  /** The selection on the move, with its wires following. Made at the first step, from how things are by then. */
+  move?: PartMove;
+  /** A button has been seen held down during this. Some trackpad gestures may never report one. */
+  pressed?: boolean;
+  /** Shift held, so a marquee adds to the selection. */
+  adding?: boolean;
 }
+
+const WIRING = "Wiring. Click to add a corner, click a pin or wire to finish, Esc to cancel.";
 
 export class SchematicCanvas {
   readonly el: HTMLCanvasElement;
@@ -27,7 +85,7 @@ export class SchematicCanvas {
   onStatus: (text: string) => void = () => {};
   /** Double-click on a part: toggle a switch or open an instrument. */
   onActivate: (comp: SchComponent) => void = () => {};
-  /** Value shown beside each net after a simulation, keyed by a pin-world position. */
+  /** Value shown beside each net after a simulation, keyed by a pin as "part id/pin name". */
   probes = new Map<string, string>();
   /** What indicator parts currently show, keyed by component id. */
   displays = new Map<string, PartDisplay>();
@@ -36,6 +94,8 @@ export class SchematicCanvas {
   private oy = 300;
   private zoom = 1;
   private placing: string | undefined;
+  /** How the part being placed is turned. */
+  private placingTurn: Pick<SchComponent, "rotation" | "mirrored"> = { rotation: 0, mirrored: false };
   private annotating: { kind: "label" | "text"; value: string } | undefined;
   private clipboard: Clipboard | undefined;
   private pasteCount = 0;
@@ -44,6 +104,8 @@ export class SchematicCanvas {
   private drag: Drag | undefined;
   private box: { a: Point; b: Point } | undefined;
   private queued = false;
+  /** The status bar is saying what became of an edit, which the next click clears. */
+  private refused = false;
   private bounds = new WeakMap<object, { x0: number; y0: number; x1: number; y1: number }>();
 
   constructor(parent: HTMLElement, private doc: Doc) {
@@ -53,25 +115,36 @@ export class SchematicCanvas {
     parent.append(this.el);
     new ResizeObserver(() => this.invalidate()).observe(this.el);
     doc.subscribe(() => {
-      for (const id of [...this.selection]) if (!this.exists(id)) this.selection.delete(id);
+      if (this.selection.size) {
+        const s = this.doc.schematic;
+        const ids = new Set([...s.components, ...s.wires, ...s.labels, ...s.texts].map((item) => item.id));
+        for (const id of [...this.selection]) if (!ids.has(id)) this.selection.delete(id);
+      }
+      // An undo can take away the pin a wire started from, leaving it drawn from nothing.
+      if (this.draft && !this.pinIsAt(this.draft[0])) this.cancelTool();
       this.invalidate();
     });
+    // A second finger coming down elsewhere settles a drag, before it acts on anything.
+    window.addEventListener("pointerdown", (e) => { if (e.target !== this.el) this.doc.settle(); }, true);
     this.el.addEventListener("pointerdown", (e) => this.pointerDown(e));
     this.el.addEventListener("pointermove", (e) => this.pointerMove(e));
     this.el.addEventListener("pointerup", (e) => this.pointerUp(e));
+    // The system can end a touch, or a release can go missing, and neither may skip a drag's check.
+    this.el.addEventListener("pointercancel", (e) => this.pointerUp(e));
+    this.el.addEventListener("lostpointercapture", (e) => this.pointerUp(e));
     this.el.addEventListener("dblclick", (e) => this.doubleClick(e));
     this.el.addEventListener("wheel", (e) => this.wheel(e), { passive: false });
     this.el.setAttribute("role", "application");
     this.el.setAttribute("aria-label", "Schematic. Arrow keys move the selection, R rotates, M mirrors, Delete removes.");
-    // WebKit reports trackpad pinches as gesture events rather than wheel events.
-    let pinch = 1;
-    this.el.addEventListener("gesturestart", (e) => { e.preventDefault(); pinch = 1; });
+    // WebKit reports trackpad pinches as gesture events rather than wheel events. The scale runs
+    // from the start of the pinch, so reversing after hitting a zoom limit returns to that zoom.
+    let pinchFrom = 1;
+    this.el.addEventListener("gesturestart", (e) => { e.preventDefault(); pinchFrom = this.zoom; });
     this.el.addEventListener("gesturechange", (e) => {
       e.preventDefault();
       const gesture = e as unknown as { scale: number; clientX: number; clientY: number };
       const rect = this.el.getBoundingClientRect();
-      this.applyZoom(gesture.scale / pinch, gesture.clientX - rect.left, gesture.clientY - rect.top);
-      pinch = gesture.scale;
+      this.applyZoom((pinchFrom * gesture.scale) / this.zoom, gesture.clientX - rect.left, gesture.clientY - rect.top);
     });
     this.el.addEventListener("contextmenu", (e) => e.preventDefault());
     this.el.addEventListener("dragover", (e) => e.preventDefault());
@@ -85,11 +158,6 @@ export class SchematicCanvas {
       this.select([comp.id]);
       this.doc.notify();
     });
-  }
-
-  private exists(id: string): boolean {
-    const s = this.doc.schematic;
-    return s.components.some((c) => c.id === id) || s.wires.some((w) => w.id === id);
   }
 
   invalidate(): void {
@@ -109,10 +177,14 @@ export class SchematicCanvas {
 
   beginPlace(kind: string): void {
     this.placing = kind;
+    this.placingTurn = { rotation: 0, mirrored: false };
+    this.annotating = undefined;
     this.draft = undefined;
-    this.onStatus(`Placing ${PART_BY_KIND.get(kind)?.name}. Click to drop, Esc to finish.`);
+    this.refused = false;
+    this.onStatus(`Placing ${PART_BY_KIND.get(kind)?.name}. Click to drop, R to turn, Esc to finish.`);
     this.el.focus();
-    this.invalidate();
+    // Keys now mean the part being placed, not whatever was selected before.
+    this.select([]);
   }
 
   placeAtCenter(kind: string): void {
@@ -125,15 +197,21 @@ export class SchematicCanvas {
     this.el.focus();
   }
 
+  private refuse(text: string): void {
+    this.refused = true;
+    this.onStatus(text);
+  }
+
   cancelTool(): void {
     this.placing = undefined;
     this.annotating = undefined;
     this.draft = undefined;
+    this.refused = false;
     this.onStatus("");
     this.invalidate();
   }
 
-  fit(): void {
+  private contentBounds(): { x0: number; y0: number; x1: number; y1: number } | undefined {
     const items = this.doc.schematic;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const c of items.components) {
@@ -151,16 +229,29 @@ export class SchematicCanvas {
       x1 = Math.max(x1, note.x + Math.max(...rows.map((r) => r.length)) * 5.5);
       y1 = Math.max(y1, note.y + rows.length * 12);
     }
-    const width = this.el.clientWidth || 800;
-    const height = this.el.clientHeight || 600;
-    if (!Number.isFinite(x0)) {
+    return Number.isFinite(x0) ? { x0, y0, x1, y1 } : undefined;
+  }
+
+  /** Fits the circuit to the sheet, or to this much of it from the top left if the rest is covered. */
+  fit(clear?: { width: number; height: number }): void {
+    const bounds = this.contentBounds();
+    const width = clear?.width || this.el.clientWidth || 800;
+    const height = clear?.height || this.el.clientHeight || 600;
+    if (!bounds) {
       this.zoom = 1; this.ox = width / 2; this.oy = height / 2;
     } else {
-      this.zoom = Math.min(2, Math.max(0.05, Math.min((width - 80) / (x1 - x0 || 1), (height - 80) / (y1 - y0 || 1))));
+      const { x0, y0, x1, y1 } = bounds;
+      this.zoom = Math.min(2, Math.max(0.05, Math.min(Math.max(40, width - 80) / (x1 - x0 || 1), Math.max(40, height - 80) / (y1 - y0 || 1))));
       this.ox = width / 2 - ((x0 + x1) / 2) * this.zoom;
       this.oy = height / 2 - ((y0 + y1) / 2) * this.zoom;
     }
     this.invalidate();
+  }
+
+  /** Fits only if the circuit runs out of this area, so a view that's already clear stays as it was. */
+  fitInto(clear: { width: number; height: number }): void {
+    const bounds = this.contentBounds();
+    if (bounds && (bounds.x1 * this.zoom + this.ox > clear.width || bounds.y1 * this.zoom + this.oy > clear.height)) this.fit(clear);
   }
 
   zoomBy(factor: number): void {
@@ -178,37 +269,56 @@ export class SchematicCanvas {
   }
 
   rotateSelected(): void {
-    this.transformSelected((c) => { c.rotation = (((c.rotation + 90) % 360) as SchComponent["rotation"]); });
+    const turn = (c: Pick<SchComponent, "rotation">) => { c.rotation = (((c.rotation + 90) % 360) as SchComponent["rotation"]); };
+    if (this.placing) {
+      turn(this.placingTurn);
+      this.invalidate();
+      return;
+    }
+    this.transformSelected("That turn", turn);
   }
 
   mirrorSelected(): void {
-    this.transformSelected((c) => { c.mirrored = !c.mirrored; });
+    const mirror = (c: Pick<SchComponent, "mirrored">) => { c.mirrored = !c.mirrored; };
+    if (this.placing) {
+      mirror(this.placingTurn);
+      this.invalidate();
+      return;
+    }
+    this.transformSelected("Mirroring it", mirror);
   }
 
-  private transformSelected(apply: (c: SchComponent) => void): void {
+  private transformSelected(what: string, apply: (c: SchComponent) => void): void {
+    if (!this.doc.settle()) return;
     const comps = this.doc.schematic.components.filter((c) => this.selection.has(c.id));
     if (!comps.length) return;
     this.doc.checkpoint();
     if (this.doc.transformParts(comps, apply)) {
+      this.onStatus("");
       this.doc.notify();
     } else {
       this.doc.revert();
-      this.onStatus("That turn would change the part's connections, so it wasn't applied. Move the part somewhere clearer and try again.");
+      this.refuse(`${what} would change the part's connections, so it wasn't applied. Move the part somewhere clearer and try again.`);
     }
   }
 
   /** Moves the selection, keeping wires attached. Used for keyboard nudging. */
   nudgeSelected(dx: number, dy: number): void {
-    const comps = this.doc.schematic.components.filter((c) => this.selection.has(c.id));
-    if (!comps.length) return;
-    const start = { x: comps[0].x, y: comps[0].y };
-    this.startMove(start);
-    this.moveTo({ x: start.x + dx, y: start.y + dy });
-    this.finishMove();
+    if (!this.doc.settle() || !this.selection.size) return;
+    // A pan or marquee under way carries on afterward.
+    const under = this.drag;
+    this.startMove({ x: 0, y: 0 });
+    this.moveTo({ x: dx, y: dy });
+    this.doc.settle();
+    this.drag = under;
+  }
+
+  private onlyWiresSelected(): boolean {
+    return this.doc.schematic.wires.filter((w) => this.selection.has(w.id)).length === this.selection.size;
   }
 
   deleteSelected(): void {
-    if (!this.selection.size) return;
+    if (!this.doc.settle() || !this.selection.size) return;
     this.doc.checkpoint();
     for (const id of this.selection) {
       this.doc.removeComponentAndWires(id);
@@ -221,11 +331,13 @@ export class SchematicCanvas {
   }
 
   selectAll(): void {
+    if (!this.doc.settle()) return;
     const s = this.doc.schematic;
     this.select([...s.components, ...s.wires, ...s.labels, ...s.texts].map((item) => item.id));
   }
 
   copySelected(): void {
+    if (!this.doc.settle()) return;
     const s = this.doc.schematic;
     const picked = s.components.filter((c) => this.selection.has(c.id));
     // SPICE stored as fixed text names its own devices and nets, so a second copy would
@@ -234,18 +346,28 @@ export class SchematicCanvas {
     if (fixed.length) {
       this.onStatus(`${fixed.map((c) => c.refDes || "That part").join(", ")} can't be copied, because its stored SPICE uses fixed names.`);
     }
-    this.clipboard = structuredClone({
+    // A net's name stays behind, as on a copy it would join the two circuits.
+    const copy = {
       components: picked.filter((c) => !fixed.includes(c)),
       wires: s.wires.filter((w) => this.selection.has(w.id)),
-    });
+      texts: s.texts.filter((t) => this.selection.has(t.id)),
+    };
+    // Copying nothing keeps what was copied before.
+    if (!copy.components.length && !copy.wires.length && !copy.texts.length) return;
+    this.clipboard = structuredClone(copy);
     this.pasteCount = 0;
   }
 
   paste(): void {
-    if (!this.clipboard) return;
+    if (!this.clipboard || !this.doc.settle()) return;
     this.doc.checkpoint();
-    const offset = 40 * ++this.pasteCount;
-    this.select(this.doc.paste(this.clipboard, offset, offset));
+    const ids = this.doc.pasteClear(this.clipboard, 40 * ++this.pasteCount);
+    if (!ids) {
+      this.doc.revert();
+      this.refuse("There's no clear spot nearby for the copy, so it wasn't pasted.");
+      return;
+    }
+    this.select(ids);
     this.doc.notify();
   }
 
@@ -254,8 +376,10 @@ export class SchematicCanvas {
     this.annotating = { kind, value };
     this.placing = undefined;
     this.draft = undefined;
+    this.refused = false;
     this.onStatus(kind === "label" ? `Click a wire to name its net "${value}".` : "Click to place the note.");
     this.el.focus();
+    this.select([]);
   }
 
   private toWorld(e: { offsetX: number; offsetY: number } | MouseEvent): Point {
@@ -270,36 +394,13 @@ export class SchematicCanvas {
     const key = comp.graphics ?? PART_BY_KIND.get(comp.kind)?.graphics ?? comp;
     const cached = this.bounds.get(key);
     if (cached) return cached;
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    const add = (x: number, y: number) => {
-      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
-    };
-    for (const g of this.graphicsOf(comp)) {
-      if (g.kind === "line" || g.kind === "polygon") g.points.forEach((p) => add(p.x, p.y));
-      else if (g.kind === "rect") { add(g.x, g.y); add(g.x + g.w, g.y + g.h); }
-      else if (g.kind === "ellipse") { add(g.cx - g.rx, g.cy - g.ry); add(g.cx + g.rx, g.cy + g.ry); }
-    }
-    for (const p of comp.pins) add(p.x, p.y);
-    if (!Number.isFinite(x0)) { x0 = y0 = -10; x1 = y1 = 10; }
-    const result = { x0, y0, x1, y1 };
+    const result = symbolBounds(comp);
     this.bounds.set(key, result);
     return result;
   }
 
   private worldBounds(comp: SchComponent) {
-    const b = this.localBounds(comp);
-    const corners = [
-      pinWorld(comp, { x: b.x0, y: b.y0 }), pinWorld(comp, { x: b.x1, y: b.y0 }),
-      pinWorld(comp, { x: b.x0, y: b.y1 }), pinWorld(comp, { x: b.x1, y: b.y1 }),
-    ];
-    return {
-      x0: Math.min(...corners.map((p) => p.x)), y0: Math.min(...corners.map((p) => p.y)),
-      x1: Math.max(...corners.map((p) => p.x)), y1: Math.max(...corners.map((p) => p.y)),
-    };
-  }
-
-  private graphicsOf(comp: SchComponent): Graphic[] {
-    return comp.graphics ?? PART_BY_KIND.get(comp.kind)?.graphics ?? [];
+    return placedBounds(comp, this.localBounds(comp));
   }
 
   private pinAt(p: Point): Point | undefined {
@@ -317,6 +418,10 @@ export class SchematicCanvas {
       }
     }
     return best;
+  }
+
+  private pinIsAt(p: Point): boolean {
+    return this.doc.schematic.components.some((c) => c.pins.some((pin) => pointKey(pinWorld(c, pin)) === pointKey(p)));
   }
 
   /** Position in CSS pixels relative to the page. */
@@ -343,28 +448,29 @@ export class SchematicCanvas {
   }
 
   private nearestWirePoint(p: Point): Point | undefined {
-    const wire = this.wireAt(p);
-    if (!wire) return undefined;
-    for (let i = 1; i < wire.points.length; i++) {
-      const a = wire.points[i - 1];
-      const b = wire.points[i];
-      const reach = 5 / this.zoom;
-      if (a.y === b.y && Math.abs(p.y - a.y) <= reach && p.x >= Math.min(a.x, b.x) - reach && p.x <= Math.max(a.x, b.x) + reach) {
-        return { x: Math.min(Math.max(snap(p.x), Math.min(a.x, b.x)), Math.max(a.x, b.x)), y: a.y };
-      }
-      if (a.x === b.x && Math.abs(p.x - a.x) <= reach && p.y >= Math.min(a.y, b.y) - reach && p.y <= Math.max(a.y, b.y) + reach) {
-        return { x: a.x, y: Math.min(Math.max(snap(p.y), Math.min(a.y, b.y)), Math.max(a.y, b.y)) };
-      }
-    }
-    return wire.points[0];
+    return pointOnWires(this.doc.schematic.wires, p, 5 / this.zoom);
+  }
+
+  /** What a click would land on when ending a wire or label. Zoomed far out a pin reaches well past a wire, so the nearer wins. */
+  private landingAt(p: Point): Point | undefined {
+    const pin = this.pinAt(p);
+    const onWire = this.nearestWirePoint(p);
+    if (!pin || !onWire) return pin ?? onWire;
+    return Math.hypot(onWire.x - p.x, onWire.y - p.y) < Math.hypot(pin.x - p.x, pin.y - p.y) ? onWire : pin;
   }
 
   private annotationAt(p: Point): string | undefined {
     const s = this.doc.schematic;
     const hit = (x: number, y: number, width: number) => p.x >= x - 4 && p.x <= x + width && p.y >= y - 14 && p.y <= y + 8;
-    const label = s.labels.find((l) => hit(l.x, l.y, 8 + l.net.length * 6));
+    const label = s.labels.find((l) => !l.hidden && hit(l.x, l.y, 8 + l.net.length * 6));
     if (label) return label.id;
     return s.texts.find((t) => hit(t.x, t.y, 8 + t.text.length * 6))?.id;
+  }
+
+  /** A net's name whose dot is here. The dot sits on the name's wire, so this comes before the wire. */
+  private nameDotAt(p: Point): string | undefined {
+    const reach = 5 / this.zoom;
+    return this.doc.schematic.labels.find((l) => !l.hidden && Math.hypot(l.x - p.x, l.y - p.y) <= reach)?.id;
   }
 
   private componentAt(p: Point): SchComponent | undefined {
@@ -379,21 +485,39 @@ export class SchematicCanvas {
   private pointerDown(e: PointerEvent): void {
     this.el.focus();
     this.el.setPointerCapture(e.pointerId);
+    if (this.refused) {
+      this.refused = false;
+      this.onStatus(this.draft ? WIRING : "");
+    }
+    // A second finger ends whatever the first was doing, through its check if that was a drag.
+    this.doc.settle();
+    this.drag = undefined;
+    this.box = undefined;
     const p = this.toWorld(e);
     this.mouse = p;
-    if (e.button === 1 || e.button === 2 || e.altKey) {
-      if (e.button === 2 && (this.draft || this.placing)) { this.cancelTool(); return; }
-      this.drag = { kind: "pan", start: { x: e.clientX, y: e.clientY }, last: { x: e.clientX, y: e.clientY } };
+    const secondary = isSecondaryClick(e, isMac());
+    if (e.button === 1 || secondary || e.altKey) {
+      if (secondary && (this.draft || this.placing)) { this.cancelTool(); return; }
+      this.drag = { kind: "pan", pointer: e.pointerId, start: { x: e.clientX, y: e.clientY }, last: { x: e.clientX, y: e.clientY } };
       return;
     }
     if (this.annotating) {
       const { kind, value } = this.annotating;
+      // Land exactly on the nearest pin or wire so the name reaches that net. On empty sheet
+      // it would name nothing, then silently connect whatever is placed there later.
+      const at = kind === "label" ? this.landingAt(p) : undefined;
+      if (kind === "label" && !at) {
+        this.onStatus(`That's empty sheet. Click a wire or pin to name its net "${value}", or press Esc.`);
+        return;
+      }
+      if (at && this.doc.crossingAt(at)) {
+        this.onStatus("Two wires cross there, so a name on that spot would connect them both. Click a little way along the one you mean, or press Esc.");
+        return;
+      }
       this.annotating = undefined;
       this.onStatus("");
       this.doc.checkpoint();
-      if (kind === "label") {
-        // Land exactly on the nearest pin or wire so the name reaches that net.
-        const at = this.pinAt(p) ?? this.nearestWirePoint(p) ?? { x: snap(p.x), y: snap(p.y) };
+      if (at) {
         this.doc.schematic.labels.push({ id: newId("l"), x: at.x, y: at.y, net: value });
       } else {
         this.doc.schematic.texts.push({ id: newId("t"), x: snap(p.x), y: snap(p.y), text: value });
@@ -404,32 +528,37 @@ export class SchematicCanvas {
     if (this.placing) {
       this.doc.checkpoint();
       const comp = this.doc.addPart(this.placing, snap(p.x), snap(p.y));
+      Object.assign(comp, this.placingTurn);
       this.select([comp.id]);
       this.doc.notify();
-      if (!e.shiftKey) this.placing = undefined;
-      this.onStatus("");
+      if (!e.shiftKey) {
+        this.placing = undefined;
+        this.onStatus("");
+      }
       return;
     }
-    const pin = this.pinAt(p);
     if (this.draft) {
-      const target = pin ?? (this.wireAt(p) ? { x: snap(p.x), y: snap(p.y) } : undefined);
+      const target = this.landingAt(p);
       const last = this.draft[this.draft.length - 1];
-      if (target) {
-        this.doc.checkpoint();
-        this.doc.addWire([...this.draft.slice(0, -1), ...(this.doc.clearRoute(last, target) ?? route(last, target))]);
-        this.draft = undefined;
-        this.onStatus("");
-        this.doc.notify();
+      // Back on the start with nothing drawn yet, so there is no wire to make.
+      if (target && simplify([...this.draft, target]).length < 2) {
+        this.cancelTool();
+      } else if (target) {
+        this.finishWire(target);
       } else {
         const at = { x: snap(p.x), y: snap(p.y) };
-        this.draft = [...this.draft.slice(0, -1), ...route(last, at)];
+        const next = [...this.draft.slice(0, -1), ...route(last, at)];
+        const problem = this.doc.wireProblem(next);
+        if (problem) this.refuse(problem);
+        else this.draft = next;
       }
       this.invalidate();
       return;
     }
+    const pin = this.pinAt(p);
     if (pin) {
       this.draft = [pin];
-      this.onStatus("Wiring. Click to add a corner, click a pin or wire to finish, Esc to cancel.");
+      this.onStatus(WIRING);
       return;
     }
     const comp = this.componentAt(p);
@@ -441,126 +570,100 @@ export class SchematicCanvas {
       } else if (!this.selection.has(comp.id)) {
         this.select([comp.id]);
       }
-      this.startMove(p);
+      this.startMove(p, e.pointerId);
       return;
     }
-    const wire = this.wireAt(p);
+    const dot = this.nameDotAt(p);
+    const wire = dot ? undefined : this.wireAt(p);
     if (wire) {
       if (e.shiftKey) this.select([...this.selection, wire.id]);
       else if (!this.selection.has(wire.id)) this.select([wire.id]);
+      this.startMove(p, e.pointerId);
       return;
     }
-    const note = this.annotationAt(p);
+    const note = dot ?? this.annotationAt(p);
     if (note) {
-      this.select(e.shiftKey ? [...this.selection, note] : [note]);
+      if (e.shiftKey) this.select([...this.selection, note]);
+      else if (!this.selection.has(note)) this.select([note]);
+      this.startMove(p, e.pointerId);
       return;
     }
     if (!e.shiftKey) this.select([]);
-    this.drag = { kind: "box", start: p, last: p };
+    this.drag = { kind: "box", pointer: e.pointerId, start: p, last: p, adding: e.shiftKey };
     this.box = { a: p, b: p };
   }
 
-  private startMove(p: Point): void {
-    const stretch: NonNullable<Drag["stretch"]> = [];
-    const labels: NetLabel[] = [];
-    for (const comp of this.doc.schematic.components) {
-      if (!this.selection.has(comp.id)) continue;
-      for (const pin of comp.pins) {
-        const at = pinWorld(comp, pin);
-        // A label on a pin holds that pin's connection, so it has to travel with it.
-        labels.push(...this.doc.schematic.labels.filter((l) => l.x === at.x && l.y === at.y));
-        for (const wire of this.doc.schematic.wires) {
-          // Selected wires travel with the selection instead of bending.
-          if (this.selection.has(wire.id)) continue;
-          const n = wire.points.length - 1;
-          if (wire.points[0].x === at.x && wire.points[0].y === at.y) stretch.push({ wire, end: "first", comp });
-          else if (wire.points[n].x === at.x && wire.points[n].y === at.y) stretch.push({ wire, end: "last", comp });
-        }
-      }
+  /** Ends the wire being drawn, on what was clicked or where it stopped. If that isn't safe, it stays open and says why. */
+  private finishWire(target?: Point): void {
+    const { refused, note } = this.doc.finishWire(this.draft!, target);
+    if (refused) {
+      this.refuse(refused);
+      return;
     }
-    this.drag = {
-      kind: "move", start: p, last: { x: snap(p.x), y: snap(p.y) }, stretch, labels,
-      signature: connectivitySignature(this.doc.schematic),
-    };
+    this.draft = undefined;
+    if (note) this.refuse(note);
+    else this.onStatus("");
+    this.doc.notify();
+  }
+
+  private startMove(p: Point, pointer = -1): void {
+    const at = { x: snap(p.x), y: snap(p.y) };
+    this.drag = { kind: "move", pointer, start: at, last: at };
   }
 
   private moveTo(p: Point): void {
     const drag = this.drag;
     if (drag?.kind !== "move") return;
     const at = { x: snap(p.x), y: snap(p.y) };
-    const dx = at.x - drag.last.x;
-    const dy = at.y - drag.last.y;
-    if (!dx && !dy) return;
-    if (!drag.moved) { this.doc.checkpoint(); drag.moved = true; }
-    for (const comp of this.doc.schematic.components) {
-      if (this.selection.has(comp.id)) { comp.x += dx; comp.y += dy; }
-    }
-    for (const label of drag.labels ?? []) {
-      label.x += dx;
-      label.y += dy;
-    }
-    for (const wire of this.doc.schematic.wires) {
-      if (this.selection.has(wire.id)) wire.points = wire.points.map((pt) => ({ x: pt.x + dx, y: pt.y + dy }));
-    }
-    for (const s of drag.stretch ?? []) {
-      // Other wires bend to keep right angles.
-      const pts = s.wire.points;
-      const idx = s.end === "first" ? 0 : pts.length - 1;
-      const nextIdx = s.end === "first" ? 1 : pts.length - 2;
-      const horizontal = pts[nextIdx] && pts[idx].y === pts[nextIdx].y;
-      const moved = { x: pts[idx].x + dx, y: pts[idx].y + dy };
-      if (pts.length === 2 && pts[nextIdx]) {
-        const elbow = horizontal ? { x: pts[nextIdx].x, y: moved.y } : { x: moved.x, y: pts[nextIdx].y };
-        s.wire.points = s.end === "first" ? [moved, elbow, pts[nextIdx]] : [pts[nextIdx], elbow, moved];
-      } else if (pts[nextIdx]) {
-        pts[idx] = moved;
-        if (horizontal) pts[nextIdx] = { x: pts[nextIdx].x, y: moved.y };
-        else pts[nextIdx] = { x: moved.x, y: pts[nextIdx].y };
+    if (at.x === drag.last.x && at.y === drag.last.y) return;
+    if (!drag.move) {
+      if (this.onlyWiresSelected()) {
+        this.drag = undefined;
+        // What was pressed can be gone by now, deleted by a key.
+        if (this.selection.size) this.refuse("A wire moves with its parts. Move a part instead.");
+        return;
       }
+      this.doc.checkpoint();
+      const comps = this.doc.schematic.components.filter((c) => this.selection.has(c.id));
+      drag.move = new PartMove(this.doc, comps, this.selection);
+      this.doc.hold(() => this.finishMove(drag));
     }
+    drag.move.shift(at.x - drag.start.x, at.y - drag.start.y);
     drag.last = at;
   }
 
-  private finishMove(): void {
-    const drag = this.drag;
-    this.drag = undefined;
-    if (drag?.kind !== "move" || !drag.moved) return;
-    for (const s of drag.stretch ?? []) s.wire.points = simplify(s.wire.points);
-    if (connectivitySignature(this.doc.schematic) !== drag.signature) {
-      // Bending can land on another wire or pin. Reroute cleanly, and refuse if that fails too.
-      const comps = this.doc.schematic.components.filter((c) => this.selection.has(c.id));
-      if (!this.rerouteAfterMove(comps, drag.signature!)) {
-        this.doc.revert();
-        this.onStatus("That move would change the circuit's connections, so it wasn't applied. Delete a wire first to change what connects.");
-        return;
-      }
+  private finishMove(drag: Drag): boolean {
+    if (this.drag === drag) this.drag = undefined;
+    // Dragged away and back again, so nothing has changed.
+    if (drag.last.x === drag.start.x && drag.last.y === drag.start.y) {
+      this.doc.revert();
+      return true;
+    }
+    // A net's name dropped near its wire lands on the wire.
+    const name = this.selection.size === 1 ? this.doc.schematic.labels.find((l) => this.selection.has(l.id)) : undefined;
+    if (name) Object.assign(name, this.landingAt(name));
+    if (!drag.move!.settle()) {
+      this.doc.revert();
+      this.refuse(name
+        ? "A net's name has to stay on that net, so it wasn't moved. Drop it on one of the net's wires."
+        : "That move would change the circuit's connections, so it wasn't applied. Try another spot.");
+      return false;
     }
     this.onStatus("");
     this.doc.notify();
-  }
-
-  private rerouteAfterMove(comps: SchComponent[], signature: string): boolean {
-    const schematic = this.doc.schematic;
-    const pinKeys = new Set(comps.flatMap((c) => c.pins.map((p) => {
-      const at = pinWorld(c, p);
-      return `${at.x},${at.y}`;
-    })));
-    const touches = (p: Point | undefined) => p !== undefined && pinKeys.has(`${p.x},${p.y}`);
-    const affected = schematic.wires.filter((w) => !this.selection.has(w.id) && (touches(w.points[0]) || touches(w.points[w.points.length - 1])));
-    schematic.wires = schematic.wires.filter((w) => !affected.includes(w));
-    for (const wire of affected) {
-      const a = wire.points[0];
-      const b = wire.points[wire.points.length - 1];
-      wire.points = this.doc.clearRoute(a, b) ?? route(a, b);
-      schematic.wires.push(wire);
-    }
-    return connectivitySignature(schematic) === signature;
+    return true;
   }
 
   private pointerMove(e: PointerEvent): void {
     const p = this.toWorld(e);
     this.mouse = p;
-    const drag = this.drag;
+    const drag = this.drag?.pointer === e.pointerId ? this.drag : undefined;
+    // With nothing held down any more, the release went missing, such as when the window lost focus.
+    if (drag?.pressed && !e.buttons) {
+      this.pointerUp(e);
+      return;
+    }
+    if (drag && e.buttons) drag.pressed = true;
     if (drag?.kind === "pan") {
       this.ox += e.clientX - drag.last.x;
       this.oy += e.clientY - drag.last.y;
@@ -574,15 +677,17 @@ export class SchematicCanvas {
   }
 
   private pointerUp(e: PointerEvent): void {
-    this.el.releasePointerCapture(e.pointerId);
+    if (this.el.hasPointerCapture(e.pointerId)) this.el.releasePointerCapture(e.pointerId);
     const drag = this.drag;
-    if (drag?.kind === "move") {
-      this.finishMove();
+    // Only the pointer doing the drag can end it. Another's lifting says nothing about it.
+    if (drag?.pointer !== e.pointerId) return;
+    this.drag = undefined;
+    if (drag.kind === "move") {
+      this.doc.settle();
       this.invalidate();
       return;
     }
-    this.drag = undefined;
-    if (drag?.kind === "box" && this.box) {
+    if (drag.kind === "box" && this.box) {
       const { a, b } = this.box;
       const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
       if (x1 - x0 > 2 || y1 - y0 > 2) {
@@ -590,8 +695,11 @@ export class SchematicCanvas {
           const box = this.worldBounds(c);
           return box.x0 >= x0 && box.x1 <= x1 && box.y0 >= y0 && box.y1 <= y1;
         }).map((c) => c.id);
-        const wires = this.doc.schematic.wires.filter((w) => w.points.every((p) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1));
-        this.select([...ids, ...wires.map((w) => w.id)]);
+        const inside = (p: Point) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
+        const s = this.doc.schematic;
+        const wires = s.wires.filter((w) => w.points.every(inside));
+        const notes = [...s.labels.filter((l) => !l.hidden), ...s.texts].filter(inside);
+        this.select([...(drag.adding ? this.selection : []), ...ids, ...wires.map((w) => w.id), ...notes.map((n) => n.id)]);
       }
       this.box = undefined;
     }
@@ -599,6 +707,7 @@ export class SchematicCanvas {
   }
 
   private doubleClick(e: MouseEvent): void {
+    if (isSecondaryClick(e, isMac())) return;
     const p = this.toWorld(e);
     if (!this.draft) {
       const comp = this.componentAt(p);
@@ -606,24 +715,18 @@ export class SchematicCanvas {
       return;
     }
     const last = this.draft[this.draft.length - 1];
-    if (this.draft.length > 1 && Math.hypot(last.x - p.x, last.y - p.y) < 20) {
-      this.doc.checkpoint();
-      this.doc.addWire(this.draft);
-      this.draft = undefined;
-      this.doc.notify();
-    }
+    if (simplify(this.draft).length > 1 && Math.hypot(last.x - p.x, last.y - p.y) < 20) this.finishWire();
   }
 
   private wheel(e: WheelEvent): void {
     e.preventDefault();
     const rect = this.el.getBoundingClientRect();
-    // A mouse wheel moves in whole notches, while a trackpad scrolls in small mixed steps.
-    const notched = e.deltaMode === 1 || (e.deltaX === 0 && Number.isInteger(e.deltaY) && Math.abs(e.deltaY) >= 100);
-    if (e.ctrlKey || e.metaKey || notched) {
-      this.applyZoom(Math.exp(-Math.max(-300, Math.min(300, e.deltaY)) * (notched ? 0.002 : 0.01)), e.clientX - rect.left, e.clientY - rect.top);
+    const action = wheelAction(e, isMac());
+    if ("zoom" in action) {
+      this.applyZoom(action.zoom, e.clientX - rect.left, e.clientY - rect.top);
     } else {
-      this.ox -= e.deltaX;
-      this.oy -= e.deltaY;
+      this.ox -= action.panX;
+      this.oy -= action.panY;
       this.invalidate();
     }
   }
@@ -678,31 +781,14 @@ export class SchematicCanvas {
     };
 
     ctx.lineWidth = 1.3;
-    const ends = new Map<string, number>();
     for (const wire of this.doc.schematic.wires) {
       ctx.strokeStyle = this.selection.has(wire.id) ? accent : wireColor;
       ctx.beginPath();
       wire.points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
       ctx.stroke();
-      for (const end of [wire.points[0], wire.points[wire.points.length - 1]]) {
-        if (!end) continue;
-        const key = `${end.x},${end.y}`;
-        ends.set(key, (ends.get(key) ?? 0) + 1);
-      }
     }
     ctx.fillStyle = wireColor;
-    const wires = this.doc.schematic.wires;
-    for (const [key, count] of ends) {
-      const [x, y] = key.split(",").map(Number);
-      // A dot marks a real join: three wire ends, or one wire ending on another's run.
-      const tee = count < 3 && wires.length <= 2000 && wires.some((w) => w.points.some((p, i) => {
-        if (i === 0) return false;
-        const a = w.points[i - 1];
-        const onRun = (a.x === p.x && x === a.x && y > Math.min(a.y, p.y) && y < Math.max(a.y, p.y))
-          || (a.y === p.y && y === a.y && x > Math.min(a.x, p.x) && x < Math.max(a.x, p.x));
-        return onRun;
-      }));
-      if (count < 3 && !tee) continue;
+    for (const { x, y } of junctions(this.doc.schematic)) {
       ctx.beginPath(); ctx.arc(x, y, 2.6, 0, 7); ctx.fill();
     }
 
@@ -742,24 +828,31 @@ export class SchematicCanvas {
       note.text.split("\n").forEach((row, i) => ctx.fillText(row, note.x, note.y + i * 12));
     }
 
-    for (const [key, value] of this.probes) {
-      const [x, y] = key.split(",").map(Number);
-      const width = ctx.measureText(value).width + 8;
-      ctx.fillStyle = color("--probe");
-      ctx.fillRect(x + 3, y - 17, width, 13);
-      ctx.fillStyle = "#fff";
-      ctx.fillText(value, x + 7, y - 10);
+    if (this.probes.size) {
+      for (const comp of this.doc.schematic.components) {
+        for (const pin of comp.pins) {
+          const value = this.probes.get(`${comp.id}/${pin.name}`);
+          if (value === undefined) continue;
+          const { x, y } = pinWorld(comp, pin);
+          const width = ctx.measureText(value).width + 8;
+          ctx.fillStyle = color("--probe");
+          ctx.fillRect(x + 3, y - 17, width, 13);
+          ctx.fillStyle = "#fff";
+          ctx.fillText(value, x + 7, y - 10);
+        }
+      }
     }
 
-    const hoverPin = this.pinAt(this.mouse);
-    if (hoverPin && !this.placing && !this.drag) {
+    // While wiring, a ring also shows where a click would join a wire.
+    const hover = this.draft ? this.landingAt(this.mouse) : this.pinAt(this.mouse);
+    if (hover && !this.placing && !this.drag) {
       ctx.strokeStyle = accent;
       ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(hoverPin.x, hoverPin.y, 4.5, 0, 7); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hover.x, hover.y, 4.5, 0, 7); ctx.stroke();
     }
     if (this.draft) {
       const last = this.draft[this.draft.length - 1];
-      const end = hoverPin ?? { x: snap(this.mouse.x), y: snap(this.mouse.y) };
+      const end = hover ?? { x: snap(this.mouse.x), y: snap(this.mouse.y) };
       ctx.strokeStyle = accent;
       ctx.lineWidth = 1.3;
       ctx.beginPath();
@@ -771,8 +864,8 @@ export class SchematicCanvas {
       if (part) {
         ctx.globalAlpha = 0.55;
         this.drawComponent(ctx, {
-          id: "", refDes: "", kind: part.kind, x: snap(this.mouse.x), y: snap(this.mouse.y), rotation: 0,
-          mirrored: false, params: {}, pins: part.pins, spice: "",
+          id: "", refDes: "", kind: part.kind, x: snap(this.mouse.x), y: snap(this.mouse.y), ...this.placingTurn,
+          params: {}, pins: part.pins, spice: "",
         }, accent);
         ctx.globalAlpha = 1;
       }
@@ -818,7 +911,7 @@ export class SchematicCanvas {
     ctx.strokeStyle = stroke;
     ctx.fillStyle = stroke;
     ctx.lineWidth = 1.3;
-    for (const g of this.graphicsOf(comp)) {
+    for (const g of symbolGraphics(comp)) {
       ctx.beginPath();
       switch (g.kind) {
         case "line":
@@ -853,8 +946,7 @@ export class SchematicCanvas {
 
   private drawLabels(ctx: CanvasRenderingContext2D, comp: SchComponent, b: { x0: number; y0: number; x1: number; y1: number }, color: string): void {
     if (!comp.refDes || comp.kind === "ground") return;
-    const part = PART_BY_KIND.get(comp.kind);
-    const value = comp.displayValue ?? (part?.valueParam ? comp.params[part.valueParam] : undefined);
+    const value = shownValue(comp);
     ctx.fillStyle = color;
     ctx.font = "10px -apple-system, 'Segoe UI', sans-serif";
     ctx.textAlign = "center";

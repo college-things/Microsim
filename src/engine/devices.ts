@@ -52,6 +52,10 @@ export class Resistor extends Device {
     return [this.a, this.b];
   }
 
+  override dcPath(): [number, number] {
+    return [this.a, this.b];
+  }
+
   override noise(_f: number, sink: NoiseSink): void {
     sink(this.name, this.a, this.b, 4 * BOLTZMANN * this.tempK * Math.abs(this.g));
   }
@@ -158,6 +162,10 @@ export class Inductor extends Device {
   ) {
     super(name, line);
     this.needsAccept = true;
+  }
+
+  override dcPath(): [number, number] {
+    return [this.a, this.b];
   }
 
   override allocate(c: Circuit): void {
@@ -293,6 +301,10 @@ export class VoltageSource extends Device {
     super(name, line);
   }
 
+  override dcPath(): [number, number] {
+    return [this.a, this.b];
+  }
+
   override allocate(c: Circuit): void {
     this.branch = c.branchUnknown(this.name);
   }
@@ -388,6 +400,10 @@ export class VCVS extends Device {
     private readonly gain: number,
   ) {
     super(name, line);
+  }
+
+  override dcPath(): [number, number] {
+    return [this.a, this.b];
   }
 
   override allocate(c: Circuit): void {
@@ -522,6 +538,10 @@ export class CCVS extends Device {
     private readonly r: number,
   ) {
     super(name, line);
+  }
+
+  override dcPath(): [number, number] {
+    return [this.a, this.b];
   }
 
   override allocate(c: Circuit): void {

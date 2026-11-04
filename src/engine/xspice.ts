@@ -218,6 +218,8 @@ export function familyLevels(c: Circuit, modelName: string): LogicLevels {
       note: `Digital levels for ${part} assumed from its TTL family: input ${low === high ? `threshold ${low} V` : `thresholds ${low} and ${high} V`}, outputs 0 and ${vcc} V`,
     };
   }
+  // A generic part stands for no real family, so these are simply its levels.
+  if (name.endsWith("_generic")) return DEFAULT_LEVELS;
   return {
     ...DEFAULT_LEVELS,
     note: `Digital levels for model ${name} assumed: its name gives no logic family, so inputs switch at 2.5 V and outputs swing 0 to 5 V`,

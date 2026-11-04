@@ -91,31 +91,37 @@ export const EXAMPLES: Example[] = [
   {
     name: "Full-wave rectifier",
     build(doc) {
-      const gen = doc.addPart("vsin", -260, 0, { amp: "12", freq: "60" });
-      const d1 = doc.addPart("diode", -120, -80);
-      const d2 = doc.addPart("diode", 40, -80);
-      const d3 = doc.addPart("diode", -120, 80);
-      const d4 = doc.addPart("diode", 40, 80);
-      const load = doc.addPart("resistor", 200, 0, { value: "1k" });
+      // The source sits between the bridge's two legs, so nothing has to cross them.
+      const gen = doc.addPart("vsin", 0, 0, { amp: "12", freq: "60" });
+      gen.rotation = 270;
+      const d1 = doc.addPart("diode", -120, -70);
+      d1.rotation = 270;
+      const d2 = doc.addPart("diode", 120, -70);
+      d2.rotation = 270;
+      const d3 = doc.addPart("diode", -120, 70);
+      d3.rotation = 270;
+      const d4 = doc.addPart("diode", 120, 70);
+      d4.rotation = 270;
+      const load = doc.addPart("resistor", 220, 0, { value: "1k" });
       load.rotation = 90;
-      const c = doc.addPart("capacitor", 300, 0, { value: "100u" });
+      const c = doc.addPart("capacitor", 320, 0, { value: "100u" });
       c.rotation = 90;
-      const gnd = doc.addPart("ground", 200, 180);
-      const scope = doc.addPart("oscilloscope", 380, -120);
-      // Bridge: AC nodes at D1/D3 and D2/D4 midpoints, DC+ at the top, DC- at the bottom.
+      doc.addPart("ground", 220, 150);
+      doc.addPart("oscilloscope", 410, -130);
+      // AC comes in at the middle of each leg, DC+ leaves along the top and DC- along the bottom.
+      doc.connectPins(d1, "A", d3, "K");
+      doc.connectPins(d2, "A", d4, "K");
+      doc.addWire([{ x: -30, y: 0 }, { x: -120, y: 0 }]);
+      doc.addWire([{ x: 30, y: 0 }, { x: 120, y: 0 }]);
       doc.connectPins(d1, "K", d2, "K");
       doc.connectPins(d3, "A", d4, "A");
-      doc.connectPins(gen, "p", d1, "A");
-      doc.connectPins(d1, "A", d3, "K");
-      doc.connectPins(gen, "n", d2, "A");
-      doc.connectPins(d2, "A", d4, "K");
       doc.connectPins(d2, "K", load, "1");
-      doc.connectPins(d4, "A", gnd, "g");
-      doc.connectPins(load, "2", gnd, "g");
-      doc.connectPins(load, "1", c, "1");
-      doc.connectPins(c, "2", gnd, "g");
-      doc.connectPins(load, "1", scope, "A");
-      doc.connectPins(scope, "G", gnd, "g");
+      doc.connectPins(d4, "A", load, "2");
+      doc.addWire([{ x: 220, y: 100 }, { x: 220, y: 140 }]);
+      doc.addWire([{ x: 220, y: -100 }, { x: 320, y: -100 }, { x: 320, y: -30 }]);
+      doc.addWire([{ x: 220, y: 100 }, { x: 320, y: 100 }, { x: 320, y: 30 }]);
+      doc.addWire([{ x: 320, y: -100 }, { x: 395, y: -100 }]);
+      doc.addWire([{ x: 320, y: 100 }, { x: 480, y: 100 }, { x: 480, y: -130 }, { x: 445, y: -130 }]);
     },
   },
   {

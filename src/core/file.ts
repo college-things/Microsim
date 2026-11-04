@@ -1,5 +1,5 @@
 // The .ohmlet file format. Everything is checked before the open document is touched.
-import type { Graphic, ImportIssue, Schematic } from "./schematic";
+import type { Graphic, ImportIssue, Schematic, Wire } from "./schematic";
 import type { AnalysisRequest } from "./sim";
 
 export interface CircuitFile {
@@ -80,6 +80,8 @@ function checkSchematic(s: unknown): Schematic {
       if (Math.abs(p.x) > LIMIT || Math.abs(p.y) > LIMIT) fail("wire position");
     }
   }
+  // Older versions could store a wire with no length, which can't be seen or removed.
+  doc.wires = (doc.wires as Wire[]).filter((w) => w.points.some((p) => p.x !== w.points[0].x || p.y !== w.points[0].y));
   for (const l of doc.labels as unknown[]) {
     if (!isObj(l) || !isStr(l.id) || !isNum(l.x) || !isNum(l.y) || !isStr(l.net)) fail("net label");
   }
@@ -99,9 +101,8 @@ export function parseCircuit(text: string): CircuitFile {
   }
   if (!isObj(data)) fail("not an object");
   const root = data as Record<string, unknown>;
-  if (root.format !== undefined && (root.format !== "ohmlet" || !isNum(root.version) || root.version > 1)) {
-    throw new Error("This circuit was saved by a newer version of Ohmlet.");
-  }
+  if (root.format !== undefined && (root.format !== "ohmlet" || !isNum(root.version))) fail("not an Ohmlet circuit");
+  if (isNum(root.version) && root.version > 1) throw new Error("This circuit was saved by a newer version of Ohmlet.");
   return {
     schematic: checkSchematic(root.format ? root.schematic : root),
     analyses: Array.isArray(root.analyses) ? (root.analyses as AnalysisRequest[]) : [],

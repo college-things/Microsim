@@ -83,7 +83,9 @@ input, select, textarea {
 .toolbar { display: flex; align-items: center; gap: 6px; padding: 5px 8px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .toolbar .sep { width: 1px; height: 20px; background: var(--line); margin: 0 3px; }
 .run { font-weight: 600; }
-.run-state { color: var(--muted); margin-left: 6px; }
+/* It takes only what the toolbar has spare, so that a status appearing can't rewrap the toolbar. */
+.run-state { color: var(--muted); margin-left: 6px; flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.panel-toggle, .small-note { display: none; }
 .main { display: grid; grid-template-columns: 188px minmax(0, 1fr) 300px; min-height: 0; }
 .palette, .side { background: var(--panel); overflow: auto; min-height: 0; }
 .palette { border-right: 1px solid var(--line); padding: 6px; }
@@ -94,9 +96,10 @@ input, select, textarea {
 .part:hover { background: var(--panel-2); border-color: var(--line); }
 .part-search { width: 100%; margin-bottom: 2px; }
 .limits-banner {
-  position: absolute; top: 0; left: 0; right: 0; z-index: 10; padding: 6px 10px;
+  grid-row: 1; display: flex; gap: 10px; align-items: flex-start; padding: 6px 10px;
   background: var(--panel-2); border-bottom: 2px solid var(--warn); color: var(--text); font-size: 12px;
 }
+.limits-banner span { flex: 1; }
 .limits-banner[hidden] { display: none; }
 .stop-at { width: 62px; }
 .stop-at-label { color: var(--muted); }
@@ -110,9 +113,11 @@ input, select, textarea {
 .field-error { color: var(--danger); margin: 2px 0 8px; }
 [aria-invalid="true"] { border-color: var(--danger); }
 .part canvas { width: 30px; height: 22px; flex: none; }
-.center { display: grid; grid-template-rows: minmax(0, 1fr) 190px; min-height: 0; min-width: 0; position: relative; }
+.center { display: grid; grid-template-rows: auto minmax(0, 1fr) 190px; min-height: 0; min-width: 0; position: relative; }
 .workspace { width: 100%; height: 100%; display: block; outline: none; touch-action: none; }
-.sheet-host { min-height: 0; position: relative; overflow: hidden; }
+/* Isolated so that however often a window is raised, it can't climb over menus and dialogs. */
+.sheet-host { grid-row: 2; min-height: 0; position: relative; overflow: hidden; isolation: isolate; }
+.spreadsheet { grid-row: 3; }
 .side { border-left: 1px solid var(--line); display: flex; flex-direction: column; }
 .tabs { display: flex; gap: 2px; padding: 4px 6px 0; border-bottom: 1px solid var(--line); background: var(--panel); flex: none; }
 .tabs button { border-radius: 5px 5px 0 0; border-bottom: 0; background: transparent; border-color: transparent; color: var(--muted); }
@@ -133,16 +138,17 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
 .issue-warning { color: var(--warn); }
 .statusbar { display: flex; gap: 14px; padding: 2px 10px; background: var(--panel-2); border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; min-height: 22px; }
 .statusbar .grow { flex: 1; }
+.statusbar button { padding: 0 6px; margin-left: 6px; font-size: 12px; }
 
 .window {
   position: absolute; z-index: 20; min-width: 300px; min-height: 180px; display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 30px #0004; overflow: hidden; resize: both;
 }
-.window-title { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: var(--panel-2); border-bottom: 1px solid var(--line); cursor: move; font-weight: 600; flex: none; }
+.window-title { touch-action: none; display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; background: var(--panel-2); border-bottom: 1px solid var(--line); cursor: move; font-weight: 600; flex: none; }
 .window-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 8px; border-top: 1px solid var(--line); flex: none; }
 .controls label { display: flex; gap: 4px; align-items: center; }
-.controls input[type="text"], .controls input:not([type]) { width: 72px; }
+.controls input[type="text"], .controls input:not([type]) { width: 68px; }
 .plot { flex: 1; min-height: 0; width: 100%; display: block; }
 .readout { font: 600 30px ui-monospace, Menlo, Consolas, monospace; padding: 16px 12px; text-align: right; background: var(--panel-2); margin: 8px; border-radius: 6px; user-select: text; font-variant-numeric: tabular-nums; }
 .overlay { position: fixed; inset: 0; background: #0006; z-index: 60; display: grid; place-items: center; padding: 16px; }
@@ -151,12 +157,21 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .legend { display: flex; flex-wrap: wrap; gap: 8px; padding: 5px 8px; max-height: 76px; overflow: auto; border-top: 1px solid var(--line); flex: none; }
 .legend label { display: flex; align-items: center; gap: 3px; }
+.plot-key { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 0 8px; max-height: 60px; overflow: auto; flex: none; font-size: 12px; }
+.plot-key:not(:empty) { padding: 4px 8px; border-top: 1px solid var(--line); }
+.plot-key span { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.plot-key i { width: 16px; height: 0; flex: none; }
 
 .chat { display: flex; flex-direction: column; height: 100%; }
 .chat-log { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; user-select: text; }
 .msg { padding: 6px 9px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.user { background: var(--accent); color: var(--accent-text); align-self: flex-end; max-width: 90%; }
 .msg.assistant { background: var(--panel-2); }
+.msg.assistant > * { margin: 0; }
+.msg.assistant > * + * { margin-top: 6px; }
+.msg.assistant ul, .msg.assistant ol { padding-left: 18px; }
+.msg.assistant pre { padding: 6px 8px; border-radius: 4px; background: var(--panel); }
+.msg.assistant code { font: 12px ui-monospace, Menlo, Consolas, monospace; }
 .msg.tool { color: var(--muted); font-size: 12px; padding: 0 2px; }
 .msg.error { color: var(--danger); }
 .chat-input { display: flex; flex-direction: column; gap: 5px; padding: 8px; border-top: 1px solid var(--line); }
@@ -164,6 +179,29 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
 .chat-actions { display: flex; justify-content: space-between; align-items: center; }
 
 @media (max-width: 860px) {
-  .main { grid-template-columns: 150px minmax(0, 1fr); }
-  .side { display: none; }
+  .main { grid-template-columns: 150px minmax(0, 1fr); position: relative; }
+  .side { display: none; position: absolute; top: 0; right: 0; bottom: 0; width: min(300px, 100%); z-index: 30; box-shadow: -8px 0 24px #0003; }
+  .side.open { display: flex; }
+  .panel-toggle { display: inline-block; }
+}
+
+/* A phone: one scrolling page, with the sheet first and room to scroll beside it. */
+@media (max-width: 560px), (max-height: 420px) {
+  html, body, #app { height: auto; }
+  body { overflow: auto; }
+  .app { display: block; height: auto; }
+  .menubar { flex-wrap: wrap; position: relative; }
+  .menu { position: static; }
+  .menu-items { top: auto; left: 8px; right: 8px; min-width: 0; max-height: 70vh; overflow: auto; }
+  .menu-items button { padding: 7px 8px; }
+  .run-state { flex-basis: 100%; margin-left: 0; }
+  .small-note { display: flex; gap: 10px; align-items: flex-start; padding: 6px 10px; background: var(--panel-2); border-bottom: 1px solid var(--line); font-size: 12px; }
+  .small-note span { flex: 1; }
+  .small-note[hidden] { display: none; }
+  .main { display: flex; flex-direction: column; }
+  .center { grid-template-rows: auto 60vh 220px; }
+  .side, .side.open { display: flex; position: static; width: auto; height: 420px; box-shadow: none; border-left: 0; border-top: 1px solid var(--line); order: 1; }
+  .palette { order: 2; border-right: 0; border-top: 1px solid var(--line); max-height: 320px; }
+  .panel-toggle { display: none; }
+  .statusbar { flex-wrap: wrap; }
 }

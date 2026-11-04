@@ -229,6 +229,8 @@ function toRequest(input: Record<string, any>, netlist: string): AnalysisRequest
 }
 
 export async function runTool(doc: Doc, name: string, input: Record<string, any>, simulate: SimulateFn): Promise<unknown> {
+  // A person's drag under way ends first, so a tool sees it checked and what a tool does stands.
+  if (name !== "list_parts") doc.settle();
   const need = (ref: string) => {
     const comp = doc.findByRef(ref);
     if (!comp) throw new Error(`No component named ${ref}.`);
@@ -279,7 +281,7 @@ export async function runTool(doc: Doc, name: string, input: Record<string, any>
     }
     case "tidy_layout": {
       const done = doc.tidyLayout();
-      if (!done) throw new Error("A tidy layout couldn't keep every connection, so the circuit was left as it was.");
+      if (!done) throw new Error("A tidy layout couldn't keep every connection and net name, so the circuit was left as it was.");
       doc.notify();
       return { ok: true, parts: doc.schematic.components.length, wires: doc.schematic.wires.length };
     }
