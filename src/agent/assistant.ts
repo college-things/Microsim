@@ -6,7 +6,7 @@ import { MUTATING_TOOLS, runTool, TOOL_SPECS, validateToolInput, type SimulateFn
 const MODEL = "claude-opus-5-5";
 const MAX_ROUNDS = 40;
 
-const SYSTEM = `You are the circuit assistant inside Ohmlet, a circuit simulator. You help people design, debug and understand electronic circuits by working directly on their open schematic.
+const SYSTEM = `You are the circuit assistant inside Microsim, a circuit simulator. You help people design, debug and understand electronic circuits by working directly on their open schematic.
 
 Use the tools to read the circuit, change it and simulate it. Base claims about circuit behaviour on simulation results and say what you measured. Every circuit needs a ground part connected to it. Read list_parts for exact pin names before placing anything unfamiliar. After building a new circuit, call tidy_layout so a person can read it, and leave existing drawings alone unless asked. Change only what the request calls for; if a request is ambiguous in a way that would change the design, ask.
 
@@ -170,6 +170,9 @@ export class Assistant {
     this.simulating = name === "run_analysis";
     try {
       const output = await runTool(this.doc, name, record, this.simulate);
+      // What it did isn't quite what it was asked, so the person hears that as well as the model.
+      const note = (output as { note?: string } | undefined)?.note;
+      if (note) events.onTool(`  ${note}`);
       return { type: "tool_result", tool_use_id: id, content: JSON.stringify(output) };
     } catch (error) {
       const text = error instanceof Error ? error.message : String(error);

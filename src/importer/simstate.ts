@@ -80,7 +80,7 @@ const ACTIVE_LABEL: Record<string, string> = {
   dcOpPoint: "DC operating point", ac: "AC sweep", transient: "transient", dcSweep: "DC sweep",
 };
 
-/** Maps the settings that have an Ohmlet equivalent, in the order the file lists them. */
+/** Maps the settings that have an Microsim equivalent, in the order the file lists them. */
 export function mapAnalyses(simState: string, active: string, issues: ImportIssue[], resolveSource?: (name: string) => string | undefined): AnalysisRequest[] {
   const out: AnalysisRequest[] = [];
   const root = parseSimState(simState);
@@ -151,7 +151,7 @@ export function mapAnalyses(simState: string, active: string, issues: ImportIssu
     if (ACTIVE_LABEL[active]) {
       issues.push({ severity: "info", message: `Analyses: the file's active analysis is ${ACTIVE_LABEL[active]}.` });
     } else {
-      issues.push({ severity: "warning", message: `Analyses: the file's active analysis (${active}) has no Ohmlet equivalent and was not imported.` });
+      issues.push({ severity: "warning", message: `Analyses: the file's active analysis (${active}) has no Microsim equivalent and was not imported.` });
     }
   }
   return out;

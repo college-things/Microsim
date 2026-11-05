@@ -134,7 +134,7 @@ function addEllipse(d: Drawing, node: XmlNode, m: Matrix): void {
 function addText(d: Drawing, node: XmlNode, m: Matrix, value: string): void {
   const text = value.trim();
   if (!text) return;
-  // The stored position is the top-left of the text box; Ohmlet draws from the baseline.
+  // The stored position is the top-left of the text box; Microsim draws from the baseline.
   const size = Math.abs(num(node.attrs["Font-Height"])) || 10;
   const at = apply(m, 0, 0);
   d.prims.push({ kind: "text", x: at.x, y: clean(at.y + size * 0.8), text, size });

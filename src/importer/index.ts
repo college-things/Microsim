@@ -1,4 +1,4 @@
-// Imports a circuit file into Ohmlet's document model. See docs/ms14-format.md for the format.
+// Imports a circuit file into Microsim's document model. See docs/ms14-format.md for the format.
 import type { AnalysisRequest } from "../core/sim";
 import type {
   FreeText,
@@ -312,7 +312,7 @@ function labelsFor(template: string, params: Record<string, string>, spice: stri
 
 interface InstrumentPlan {
   kind?: InstrumentKind;
-  /** Stored pin name to Ohmlet pin name. */
+  /** Stored pin name to Microsim pin name. */
   pins?: Record<string, string>;
 }
 
@@ -848,7 +848,7 @@ function flattenSheet(ctx: Context, sheet: Sheet, suffix: string, parentNets: Ma
       if (plan.kind === "function-generator") {
         const negative = pins.find((p) => p.name === "neg");
         if (negative?.net !== undefined) {
-          ctx.issues.push({ severity: "info", refDes, message: "Instrument: function generator uses its negative terminal, so it is imported as its stored SPICE model rather than as an Ohmlet instrument." });
+          ctx.issues.push({ severity: "info", refDes, message: "Instrument: function generator uses its negative terminal, so it is imported as its stored SPICE model rather than as an Microsim instrument." });
         } else {
           instrument = plan.kind;
           params.shape = { "0": "sine", "1": "triangle", "2": "square" }[props.WAVE_MODE ?? "0"] ?? "sine";
@@ -875,10 +875,10 @@ function flattenSheet(ctx: Context, sheet: Sheet, suffix: string, parentNets: Ma
       } else if (plan.kind) {
         instrument = plan.kind;
       } else if (spice) {
-        ctx.issues.push({ severity: "info", refDes, message: `Instrument: ${identity[3] || localName} has no Ohmlet equivalent; it is imported as its stored SPICE model, which keeps the circuit intact.` });
+        ctx.issues.push({ severity: "info", refDes, message: `Instrument: ${identity[3] || localName} has no Microsim equivalent; it is imported as its stored SPICE model, which keeps the circuit intact.` });
       } else {
         instrument = "unsupported";
-        ctx.issues.push({ severity: "warning", refDes, message: `Instrument: ${identity[3] || localName} has no Ohmlet equivalent and does not take part in the simulation.` });
+        ctx.issues.push({ severity: "warning", refDes, message: `Instrument: ${identity[3] || localName} has no Microsim equivalent and does not take part in the simulation.` });
       }
     }
 

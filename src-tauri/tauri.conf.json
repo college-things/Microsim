@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Ohmlet",
+  "productName": "Microsim",
   "version": "0.1.0",
-  "identifier": "app.ohmlet.desktop",
+  "identifier": "app.microsim.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [
-      { "title": "Ohmlet", "width": 1320, "height": 840, "minWidth": 900, "minHeight": 560, "dragDropEnabled": false }
+      { "title": "Microsim", "width": 1320, "height": 840, "minWidth": 900, "minHeight": 560, "dragDropEnabled": false }
     ],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://api.anthropic.com"

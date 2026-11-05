@@ -1,4 +1,4 @@
-// Parts a circuit can contain that Ohmlet draws but doesn't simulate. People need to hear
+// Parts a circuit can contain that Microsim draws but doesn't simulate. People need to hear
 // about these directly, because the rest of the circuit still runs and looks fine.
 import type { ImportIssue, Schematic } from "./schematic";
 
@@ -29,9 +29,9 @@ export function unsimulatedParts(doc: Schematic): string[] {
   return [...found].map(([kind, refs]) => {
     const noun = kind.replace(/^an? /, "");
     if (refs.length > 1) {
-      return `${refs.join(", ")} are each ${kind}, which Ohmlet doesn't simulate. They do nothing here, so anything that depends on them, or on a program running on them, won't respond.`;
+      return `${refs.join(", ")} are each ${kind}, which Microsim doesn't simulate. They do nothing here, so anything that depends on them, or on a program running on them, won't respond.`;
     }
-    return `${refs[0] ?? "A part"} is ${kind}, which Ohmlet doesn't simulate. This ${noun} does nothing here, so anything that depends on it, or on a program running on it, won't respond.`;
+    return `${refs[0] ?? "A part"} is ${kind}, which Microsim doesn't simulate. This ${noun} does nothing here, so anything that depends on it, or on a program running on it, won't respond.`;
   });
 }
 

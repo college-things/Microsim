@@ -70,6 +70,8 @@ interface Drag {
   last: Point;
   /** The selection on the move, with its wires following. Made at the first step, from how things are by then. */
   move?: PartMove;
+  /** Where a pointer pressed to start a move, unsnapped. Arrow keys have none. */
+  press?: Point;
   /** A button has been seen held down during this. Some trackpad gestures may never report one. */
   pressed?: boolean;
   /** Shift held, so a marquee adds to the selection. */
@@ -77,6 +79,8 @@ interface Drag {
 }
 
 const WIRING = "Wiring. Click to add a corner, click a pin or wire to finish, Esc to cancel.";
+/** How far in pixels a press can wander and still be a click, as a hand wobbles over a grid line. */
+const CLICK_WOBBLE = 4;
 
 export class SchematicCanvas {
   readonly el: HTMLCanvasElement;
@@ -181,7 +185,7 @@ export class SchematicCanvas {
     this.annotating = undefined;
     this.draft = undefined;
     this.refused = false;
-    this.onStatus(`Placing ${PART_BY_KIND.get(kind)?.name}. Click to drop, R to turn, Esc to finish.`);
+    this.onStatus(this.toolHint());
     this.el.focus();
     // Keys now mean the part being placed, not whatever was selected before.
     this.select([]);
@@ -200,6 +204,14 @@ export class SchematicCanvas {
   private refuse(text: string): void {
     this.refused = true;
     this.onStatus(text);
+  }
+
+  /** What the status bar says when there's nothing to report: the tool in hand, if any. */
+  private toolHint(): string {
+    if (this.draft) return WIRING;
+    if (this.placing) return `Placing ${PART_BY_KIND.get(this.placing)?.name}. Click to drop, R to turn, Esc to finish.`;
+    if (this.annotating) return this.annotating.kind === "label" ? `Click a wire to name its net "${this.annotating.value}".` : "Click to place the note.";
+    return "";
   }
 
   cancelTool(): void {
@@ -294,7 +306,7 @@ export class SchematicCanvas {
     if (!comps.length) return;
     this.doc.checkpoint();
     if (this.doc.transformParts(comps, apply)) {
-      this.onStatus("");
+      this.onStatus(this.toolHint());
       this.doc.notify();
     } else {
       this.doc.forgetIfUnchanged();
@@ -377,7 +389,7 @@ export class SchematicCanvas {
     this.placing = undefined;
     this.draft = undefined;
     this.refused = false;
-    this.onStatus(kind === "label" ? `Click a wire to name its net "${value}".` : "Click to place the note.");
+    this.onStatus(this.toolHint());
     this.el.focus();
     this.select([]);
   }
@@ -487,7 +499,7 @@ export class SchematicCanvas {
     this.el.setPointerCapture(e.pointerId);
     if (this.refused) {
       this.refused = false;
-      this.onStatus(this.draft ? WIRING : "");
+      this.onStatus(this.toolHint());
     }
     // A second finger ends whatever the first was doing, through its check if that was a drag.
     this.doc.settle();
@@ -559,6 +571,8 @@ export class SchematicCanvas {
     if (pin) {
       this.draft = [pin];
       this.onStatus(WIRING);
+      // Keys now mean the wire being drawn, not whatever was selected before.
+      this.select([]);
       return;
     }
     const comp = this.componentAt(p);
@@ -606,9 +620,9 @@ export class SchematicCanvas {
     this.doc.notify();
   }
 
-  private startMove(p: Point, pointer = -1): void {
+  private startMove(p: Point, pointer?: number): void {
     const at = { x: snap(p.x), y: snap(p.y) };
-    this.drag = { kind: "move", pointer, start: at, last: at };
+    this.drag = { kind: "move", pointer: pointer ?? -1, start: at, last: at, press: pointer === undefined ? undefined : p };
   }
 
   private moveTo(p: Point): void {
@@ -618,6 +632,7 @@ export class SchematicCanvas {
     if (at.x === drag.last.x && at.y === drag.last.y) return;
     if (!drag.move) {
       if (this.onlyWiresSelected()) {
+        if (drag.press && Math.hypot(p.x - drag.press.x, p.y - drag.press.y) * this.zoom < CLICK_WOBBLE) return;
         this.drag = undefined;
         // What was pressed can be gone by now, deleted by a key.
         if (this.selection.size) this.refuse("A wire moves with its parts. Move a part instead.");
@@ -649,7 +664,7 @@ export class SchematicCanvas {
         : "That move would change the circuit's connections, so it wasn't applied. Try another spot.");
       return false;
     }
-    this.onStatus("");
+    this.onStatus(this.toolHint());
     this.doc.notify();
     return true;
   }

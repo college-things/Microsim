@@ -1,4 +1,4 @@
-// The .ohmlet file format. Everything is checked before the open document is touched.
+// The .microsim file format, which .ohmlet files from before the rename also use. Everything is checked before the open document is touched.
 import type { Graphic, ImportIssue, Schematic, Wire } from "./schematic";
 import type { AnalysisRequest } from "./sim";
 
@@ -9,7 +9,7 @@ export interface CircuitFile {
 }
 
 export function serializeCircuit(file: CircuitFile): string {
-  return JSON.stringify({ format: "ohmlet", version: 1, ...file });
+  return JSON.stringify({ format: "microsim", version: 1, ...file });
 }
 
 class Bad extends Error {}
@@ -101,8 +101,8 @@ export function parseCircuit(text: string): CircuitFile {
   }
   if (!isObj(data)) fail("not an object");
   const root = data as Record<string, unknown>;
-  if (root.format !== undefined && (root.format !== "ohmlet" || !isNum(root.version))) fail("not an Ohmlet circuit");
-  if (isNum(root.version) && root.version > 1) throw new Error("This circuit was saved by a newer version of Ohmlet.");
+  if (root.format !== undefined && ((root.format !== "microsim" && root.format !== "ohmlet") || !isNum(root.version))) fail("not a Microsim circuit");
+  if (isNum(root.version) && root.version > 1) throw new Error("This circuit was saved by a newer version of Microsim.");
   return {
     schematic: checkSchematic(root.format ? root.schematic : root),
     analyses: Array.isArray(root.analyses) ? (root.analyses as AnalysisRequest[]) : [],

@@ -1,4 +1,4 @@
-// Makes the drawing carry the connections. A file states every pin's net outright, but in Ohmlet
+// Makes the drawing carry the connections. A file states every pin's net outright, but in Microsim
 // wires must decide connectivity, or deleting a wire would change nothing. Nets the drawing fully
 // connects lose their stored name from the pins; only what the drawing cannot express stays hidden.
 import { pinWorld } from "../core/netlist";

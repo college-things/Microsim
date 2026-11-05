@@ -173,7 +173,35 @@ describe("a wire with no clear path", () => {
     doc.schematic.labels.push({ id: "l", x: at.x, y: at.y, net: "my out" });
     doc.connectPins(r1, "2", r3, "1");
     expect(net(doc, r3, "1")).toBe("my_out");
-    expect(doc.schematic.labels.map((l) => l.net)).toEqual(["my out", "my out", "my out"]);
+    expect(doc.schematic.labels.map((l) => l.net)).toEqual(["my out", "my out"]);
+    expect(doc.schematic.labels.map((l) => l.x)).toEqual([pin(r1, 1).x, pin(r3, 0).x]);
+  });
+
+  it("adds nothing if connectPins is asked again, and the assistant hears that", async () => {
+    const { doc, r1, r3 } = blocked();
+    const again = { from_ref: "R1", from_pin: "2", to_ref: "R3", to_pin: "1" };
+    await expect(runTool(doc, "connect", again, noSimulator)).resolves.toMatchObject({ note: expect.stringMatching(/same net label/) });
+    const before = JSON.stringify(doc.schematic);
+    expect(doc.connectPins(r1, "2", r3, "1")).toBeUndefined();
+    await expect(runTool(doc, "connect", again, noSimulator)).resolves.toMatchObject({ ok: true, note: expect.stringMatching(/already connected/) });
+    expect(JSON.stringify(doc.schematic)).toBe(before);
+    expect(doc.schematic.labels).toHaveLength(2);
+  });
+
+  it("doesn't draw a second wire beside the first when asked again", () => {
+    const doc = new Doc();
+    const r1 = doc.addPart("resistor", 0, 0);
+    const r2 = doc.addPart("resistor", 200, 0);
+    expect(doc.connectPins(r1, "2", r2, "1")?.points.length).toBeGreaterThan(1);
+    expect(doc.connectPins(r2, "1", r1, "2")).toBeUndefined();
+    expect(doc.schematic.wires).toHaveLength(1);
+  });
+
+  it("doesn't stack a hand-wired name on the one a spot already shows", () => {
+    const { doc, r1, r3 } = blocked();
+    doc.schematic.labels.push({ id: "l", x: pin(r1, 1).x, y: pin(r1, 1).y, net: "OUT" });
+    doc.finishWire([pin(r1, 1)], pin(r3, 0));
+    expect(doc.schematic.labels).toHaveLength(2);
   });
 
   it("won't draw a route that only looks clear, through a pin just off the grid", () => {
@@ -639,10 +667,16 @@ describe("a refused edit", () => {
 
   it("tidyLayout leaves every object as it was", () => {
     const doc = new Doc();
-    // Two labels of one name, where layout will put the source's two pins.
     const v = doc.addPart("vdc", -500, -500);
     const r1 = doc.addPart("resistor", 300, 300, { value: "1k" });
-    for (const [i, p] of v.pins.entries()) doc.schematic.labels.push({ id: `l${i}`, x: p.x, y: p.y, net: "X" });
+    doc.addWire([pin(v, 0), pin(r1, 0)]);
+    doc.schematic.labels.push({ id: "l", x: 900, y: 900, net: "X" });
+    // A layout that goes wrong: the name that named nothing reaches a pin.
+    doc.clearRoute = () => {
+      const first = doc.schematic.components[0];
+      Object.assign(doc.schematic.labels[0], pinWorld(first, first.pins[0]));
+      return undefined;
+    };
     expectUntouched(doc, r1, () => {
       expect(doc.tidyLayout()).toBe(false);
     });
@@ -718,6 +752,66 @@ describe("tidy layout and named nets", () => {
     doc.schematic.labels.push({ id: "l", x: 900, y: 900, net: "gone", hidden: true });
     expect(doc.tidyLayout()).toBe(true);
     expect(doc.schematic.labels.map((l) => l.net)).not.toContain("gone");
+  });
+
+  /** The tester's case: a name left on empty sheet, right where the layout will put R1's pin. */
+  function stray(name = "OUT") {
+    const doc = new Doc();
+    const r1 = doc.addPart("resistor", -100, -200);
+    r1.rotation = 90;
+    const r2 = doc.addPart("resistor", 100, -30);
+    doc.schematic.labels.push({ id: "l", x: 0, y: -30, net: name });
+    return { doc, r1, r2 };
+  }
+
+  for (const name of ["OUT", "my net", "a[1]", "GND", "0"]) {
+    it(`keeps parts off a name called ${name} that names nothing, and says where it went`, async () => {
+      const { doc, r1, r2 } = stray(name);
+      const result = await runTool(doc, "tidy_layout", {}, noSimulator);
+      expect(result).toMatchObject({ ok: true, note: `Not on any pin, so left below the circuit: ${name}.` });
+      expect(net(doc, r1, "1")).toBeUndefined();
+      expect(net(doc, r1, "2")).toBeUndefined();
+      expect(net(doc, r2, "1")).toBeUndefined();
+      const label = doc.schematic.labels[0];
+      expect(label.net).toBe(name);
+      const lowest = Math.max(...doc.schematic.components.flatMap((c) => c.pins.map((p) => pinWorld(c, p).y)));
+      expect(label.y).toBeGreaterThan(lowest);
+      // Tidying again finds it just as safe.
+      expect(doc.tidyLayout()).toBe(true);
+      expect(net(doc, r1, "1")).toBeUndefined();
+    });
+  }
+
+  it("keeps several names that name nothing apart, and has no note when there are none", async () => {
+    const { doc } = stray();
+    doc.schematic.labels.push({ id: "m", x: 40, y: -30, net: "OUT" }, { id: "n", x: 80, y: -30, net: "IN" });
+    await expect(runTool(doc, "tidy_layout", {}, noSimulator)).resolves.toMatchObject({ note: expect.stringMatching(/IN, OUT/) });
+    expect(new Set(doc.schematic.labels.map((l) => l.y)).size).toBe(3);
+    const { doc: plain } = divider();
+    await expect(runTool(plain, "tidy_layout", {}, noSimulator)).resolves.not.toHaveProperty("note");
+  });
+
+  it("won't report a tidy that gave a pin a name it didn't have", () => {
+    const { doc, r1, r2 } = stray();
+    doc.addWire([pin(r1, 1), pin(r2, 0)]);
+    // Whatever puts a name on a pin, the check catches it. This route drops the stray name on one.
+    doc.clearRoute = () => {
+      const parked = doc.schematic.labels[0];
+      const first = doc.schematic.components[0];
+      Object.assign(parked, pinWorld(first, first.pins[0]));
+      return undefined;
+    };
+    const before = JSON.stringify(doc.schematic);
+    expect(doc.tidyLayout()).toBe(false);
+    expect(JSON.stringify(doc.schematic)).toBe(before);
+  });
+
+  it("gives a name spread around its net one label, as a second under it would seem undeletable", () => {
+    const { doc, r, v } = divider();
+    for (const [i, at] of [pin(r, 0), pin(v, 0)].entries()) doc.schematic.labels.push({ id: `l${i}`, x: at.x, y: at.y, net: "OUT" });
+    expect(doc.tidyLayout()).toBe(true);
+    expect(doc.schematic.labels.filter((l) => l.net === "OUT")).toHaveLength(1);
+    expect(net(doc, r, "1")).toBe("OUT");
   });
 
   it("spells a net's own name on any labels it needs for lack of a route", () => {
@@ -902,6 +996,14 @@ describe("while placing a part", () => {
     expect(status.text).toBe("");
   });
 
+  it("keeps saying so when an arrow key moves one that Shift placed", () => {
+    const { canvas, status, fire } = placing();
+    fire("pointerdown", 100, 100, { shiftKey: true });
+    fire("pointerup", 100, 100, { buttons: 0 });
+    canvas.nudgeSelected(10, 0);
+    expect(status.text).toMatch(/^Placing/);
+  });
+
   it("leaves a name waiting to be placed behind", () => {
     const { doc, canvas, click } = placing();
     canvas.beginAnnotation("label", "OUT");
@@ -946,6 +1048,47 @@ describe("dragging what can't or can move", () => {
     expect(JSON.stringify(doc.schematic)).toBe(before);
   });
 
+  it("a click's wobble over a grid line stays silent, whichever way it goes", () => {
+    const { canvas, status, fire, wire } = wired();
+    for (const [x, by] of [[4, 1], [14, 1], [5, -1], [5, 1], [4, 3]]) {
+      canvas.select([]);
+      fire("pointerdown", x, 0);
+      fire("pointermove", x + by, 0);
+      fire("pointerup", x + by, 0, { buttons: 0 });
+      expect(canvas.selection.has(wire.id)).toBe(true);
+      expect(status.text).toBe("");
+    }
+    // The same press carried on is a drag after all.
+    fire("pointerdown", 4, 0);
+    fire("pointermove", 5, 0);
+    expect(status.text).toBe("");
+    fire("pointermove", 20, 0);
+    expect(status.text).toBe("A wire moves with its parts. Move a part instead.");
+  });
+
+  it("measures that wobble on the screen, so it holds zoomed far out", () => {
+    const { doc, canvas, status, fire } = sheet();
+    const r1 = doc.addPart("resistor", -2000, 0);
+    const r2 = doc.addPart("resistor", 2000, 0);
+    doc.addWire([pin(r1, 1), pin(r2, 0)]);
+    Object.assign(canvas, { zoom: 0.1 });
+    // One pixel is ten units here, so every pixel crosses a grid line.
+    fire("pointerdown", 0, 0);
+    fire("pointermove", 1, 0);
+    fire("pointermove", 2, 0);
+    expect(status.text).toBe("");
+    fire("pointermove", 6, 0);
+    expect(status.text).toBe("A wire moves with its parts. Move a part instead.");
+  });
+
+  it("doesn't count an arrow key as a wobble, however far out it's zoomed", () => {
+    const { canvas, status, wire } = wired();
+    Object.assign(canvas, { zoom: 0.1 });
+    canvas.select([wire.id]);
+    canvas.nudgeSelected(10, 0);
+    expect(status.text).toBe("A wire moves with its parts. Move a part instead.");
+  });
+
   it("a wire selected with its parts still moves with them", () => {
     const { doc, canvas, fire, r1, r2, wire } = wired();
     canvas.select([r1.id, r2.id, wire.id]);
@@ -978,6 +1121,46 @@ describe("dragging what can't or can move", () => {
 
 describe("a wire being drawn", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  /** R1 selected, then a wire begun from R2's pin. */
+  function begun() {
+    const s = sheet();
+    const r1 = s.doc.addPart("resistor", -100, 0);
+    const r2 = s.doc.addPart("resistor", 100, 0);
+    const r3 = s.doc.addPart("resistor", 100, 100);
+    s.click(-100, 0);
+    expect(s.canvas.selection.has(r1.id)).toBe(true);
+    s.click(70, 0);
+    expect(s.status.text).toMatch(/^Wiring/);
+    return { ...s, r1, r2, r3 };
+  }
+
+  it("forgets the earlier selection, so keys leave that part alone", () => {
+    const { doc, canvas, status, r1 } = begun();
+    expect(canvas.selection.size).toBe(0);
+    canvas.deleteSelected();
+    canvas.rotateSelected();
+    canvas.mirrorSelected();
+    canvas.nudgeSelected(0, 10);
+    expect(doc.schematic.components).toHaveLength(3);
+    expect(r1).toMatchObject({ x: -100, y: 0, rotation: 0, mirrored: false });
+    expect(status.text).toMatch(/^Wiring/);
+    expect(doc.dirty).toBe(false);
+  });
+
+  it("keeps saying so when something selected on purpose is edited meanwhile", () => {
+    const { doc, canvas, status, r1, r3, click } = begun();
+    canvas.select([r1.id]);
+    canvas.rotateSelected();
+    expect(r1.rotation).toBe(90);
+    expect(status.text).toMatch(/^Wiring/);
+    canvas.nudgeSelected(0, 10);
+    expect(r1.y).toBe(10);
+    expect(status.text).toMatch(/^Wiring/);
+    click(pin(r3, 0).x, pin(r3, 0).y);
+    expect(doc.schematic.wires).toHaveLength(1);
+    expect(status.text).toBe("");
+  });
 
   it("is cancelled when an undo takes away the part it started from", () => {
     const { doc, status, click } = sheet();

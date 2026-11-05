@@ -2074,7 +2074,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ohmlet"
+name = "microsim"
 version = "0.1.0"
 dependencies = [
  "tauri",

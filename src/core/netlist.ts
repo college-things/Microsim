@@ -478,6 +478,13 @@ export function junctions(doc: Pick<Schematic, "components" | "wires" | "labels"
   return dots;
 }
 
+/** Names on nets with no pin, which join nothing now but take in whatever lands on them. */
+export function looseNames(doc: Schematic): string[] {
+  const { pinNets, namedNets } = buildNetlist(doc);
+  const onPins = new Set([...pinNets.values()].flatMap((nets) => [...nets.values()]));
+  return [...namedNets].filter(([, net]) => !onPins.has(net)).map(([name]) => name);
+}
+
 /**
  * Which pins are joined together. Equal means same connections. With names, a net's given
  * name counts too, as a move mustn't quietly lose it.

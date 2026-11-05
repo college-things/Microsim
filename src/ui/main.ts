@@ -22,8 +22,10 @@ import { applyInteractive, validateImportedParam } from "../importer/interactive
 import { renderMarkdown } from "./markdown";
 import { formatSI, Plot, redrawPlots, seriesStyle, type Series } from "./plot";
 
-const FILE_EXTENSION = "ohmlet";
-const KEY_STORAGE = "ohmlet.apiKey";
+const FILE_EXTENSION = "microsim";
+/** What saved circuits were called before the app was renamed. They still open. */
+const OLD_FILE_EXTENSION = "ohmlet";
+const KEY_STORAGE = "microsim.apiKey";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -38,6 +40,17 @@ const readStore = (key: string) => {
 const writeStore = (key: string, value: string) => {
   try { localStorage.setItem(key, value); } catch { /* Private windows can block storage. */ }
 };
+// Autosaves, unsaved recoveries and settings from before the app was renamed carry over.
+for (const store of [() => localStorage, () => sessionStorage]) {
+  try {
+    const saved = store();
+    for (const key of Object.keys(saved)) {
+      if (!key.startsWith("ohmlet.")) continue;
+      saved.setItem(`microsim.${key.slice(7)}`, saved.getItem(key) ?? "");
+      saved.removeItem(key);
+    }
+  } catch { /* Storage can be blocked or full, and these are only conveniences. */ }
+}
 // A website can share its origin with other sites, as GitHub Pages project sites do, and they
 // could read local storage. Session storage stays with this tab, so the key isn't kept on the web.
 const readKey = () => {
@@ -55,7 +68,7 @@ const shell = el("div", { className: "app" });
 app.append(shell);
 
 // Layout
-const menubar = el("div", { className: "menubar" }, el("span", { className: "brand" }, "Ohmlet"));
+const menubar = el("div", { className: "menubar" }, el("span", { className: "brand" }, "Microsim"));
 const toolbar = el("div", { className: "toolbar" });
 const main = el("div", { className: "main" });
 const statusbar = el("div", { className: "statusbar" });
@@ -65,9 +78,9 @@ statusbar.append(statusText, statusCount);
 shell.append(menubar, toolbar, main, statusbar);
 
 // A phone gets the panels one above the other on a page that scrolls, and an honest word about it.
-const SMALL_NOTE_STORAGE = "ohmlet.smallNoteRead";
+const SMALL_NOTE_STORAGE = "microsim.smallNoteRead";
 const smallNote = el("div", { className: "small-note", role: "note" },
-  el("span", { textContent: "Ohmlet is made for a computer. On a small screen you can open circuits, run them and read the results, but placing parts and wiring by touch is awkward." }));
+  el("span", { textContent: "Microsim is made for a computer. On a small screen you can open circuits, run them and read the results, but placing parts and wiring by touch is awkward." }));
 smallNote.append(el("button", { className: "quiet", textContent: "OK", onclick: () => {
   smallNote.hidden = true;
   writeStore(SMALL_NOTE_STORAGE, "1");
@@ -651,9 +664,12 @@ function appendConnections(wrap: HTMLElement, comp: SchComponent): void {
       const other = doc.schematic.components.find((c) => c.id === id);
       if (!other) return;
       doc.checkpoint();
-      doc.connectPins(comp, pin.name, other, name);
-      doc.notify();
-      statusText.textContent = `Connected ${comp.refDes} pin ${pin.name} to ${other.refDes} pin ${name}.`;
+      const connected = doc.connectPins(comp, pin.name, other, name);
+      if (connected) doc.notify();
+      else doc.forgetIfUnchanged();
+      statusText.textContent = connected
+        ? `Connected ${comp.refDes} pin ${pin.name} to ${other.refDes} pin ${name}.`
+        : `${comp.refDes} pin ${pin.name} and ${other.refDes} pin ${name} are already connected.`;
       target.blur();
       renderProperties();
     };
@@ -779,7 +795,7 @@ function friendly(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   // What browsers say when a part of the app that loads on demand can't be fetched.
   if (/importing a module script failed|dynamically imported module|error loading dynamically/i.test(message)) {
-    return "Part of Ohmlet couldn't load. Check your connection, wait a moment and try again.";
+    return "Part of Microsim couldn't load. Check your connection, wait a moment and try again.";
   }
   return message;
 }
@@ -1546,7 +1562,7 @@ function resetAfterLoad(): void {
   sheetTabs.refresh();
 }
 
-const OPENABLE = [FILE_EXTENSION, "ms14", "ms13", "ms12", "ms11", "ms10", "cir", "sp"];
+const OPENABLE = [FILE_EXTENSION, OLD_FILE_EXTENSION, "ms14", "ms13", "ms12", "ms11", "ms10", "cir", "sp"];
 
 async function openCircuit(): Promise<void> {
   if (!(await confirmDiscard())) return;
@@ -1579,9 +1595,9 @@ async function loadBytes(name: string, bytes: Uint8Array, path?: string): Promis
   const stem = name.replace(/\.[^.]+$/, "");
   try {
     // Everything is parsed and checked first, so a bad file can't touch the open circuit.
-    if (!OPENABLE.some((extension) => lower.endsWith(`.${extension}`))) throw new Error("Ohmlet opens .ohmlet, .ms14, .cir and .sp files.");
+    if (!OPENABLE.some((extension) => lower.endsWith(`.${extension}`))) throw new Error("Microsim opens .microsim, .ohmlet, .ms14, .cir and .sp files.");
     if (!bytes.length) throw new Error("This file is empty.");
-    if (lower.endsWith(`.${FILE_EXTENSION}`)) {
+    if (lower.endsWith(`.${FILE_EXTENSION}`) || lower.endsWith(`.${OLD_FILE_EXTENSION}`)) {
       const file = parseCircuit(new TextDecoder().decode(bytes));
       // The name on disk wins, as a file may have been renamed since it was saved.
       file.schematic.name = stem;
@@ -1629,7 +1645,7 @@ let savedPath: string | undefined;
 /** A browser downloads without asking where, so a new name has to be chosen here. */
 function askDownloadName(): void {
   askText("Save as", "File name", (value) => {
-    const name = value.replace(new RegExp(`\\.${FILE_EXTENSION}$`, "i"), "").trim();
+    const name = value.replace(new RegExp(`\\.(${FILE_EXTENSION}|${OLD_FILE_EXTENSION})$`, "i"), "").trim();
     if (!name) return;
     doc.schematic.name = name;
     // The netlist's first line carries the name, and that's no reason to call results out of date.
@@ -1677,12 +1693,12 @@ async function exportText(name: string, extension: string, contents: string): Pr
 // Autosave protects against a crash or a forced quit. It's a recovery copy, not a save. Each tab
 // has its own, and holds a lock of the same name while it's open, so a copy whose lock is free
 // was left behind by a tab that has gone, and one whose lock is held isn't anyone's to claim.
-const AUTOSAVE_PREFIX = "ohmlet.autosave";
+const AUTOSAVE_PREFIX = "microsim.autosave";
 const AUTOSAVE_KEY = `${AUTOSAVE_PREFIX}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 // Pages from an address that isn't secure have no locks, and treat every other copy as left behind.
 void navigator.locks?.request(AUTOSAVE_KEY, () => new Promise<void>(() => {}));
 // The last download, kept in case the browser never delivered it.
-const DOWNLOADED_KEY = "ohmlet.downloaded";
+const DOWNLOADED_KEY = "microsim.downloaded";
 let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
 
 function scheduleAutosave(): void {
@@ -1719,7 +1735,7 @@ function clearAutosave(): void {
 
 // A copy awaiting a decision lives apart from the autosave, so that new edits and opened files
 // can't overwrite it. It stays until the person chooses, however many times they dismiss this.
-const RECOVERY_KEY = "ohmlet.recovery";
+const RECOVERY_KEY = "microsim.recovery";
 const removeStore = (key: string) => {
   try { localStorage.removeItem(key); } catch { /* Storage can be blocked. */ }
 };
@@ -1771,7 +1787,7 @@ async function offerRecovery(): Promise<void> {
       };
       dialog("Recover your circuit?", (box, close) => {
         const pick = (value: "recover" | "discard") => { answer(value); close(); };
-        box.append(el("p", { textContent: `"${file.schematic.name}" wasn't saved when Ohmlet last closed.` }), el("div", { className: "dialog-actions" },
+        box.append(el("p", { textContent: `"${file.schematic.name}" wasn't saved when Microsim last closed.` }), el("div", { className: "dialog-actions" },
           el("button", { textContent: "Discard it", onclick: () => pick("discard") }),
           el("button", { className: "primary", textContent: "Recover", onclick: () => pick("recover"), autofocus: true }),
         ));
@@ -2024,7 +2040,7 @@ const MENUS: Record<string, MenuItem[]> = {
       "In a narrow window, the Panel button shows Properties and the Assistant.",
     ]) list.append(el("li", { textContent: tip }));
     box.append(list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
-  })], ["What Ohmlet doesn't do", () => dialog("What Ohmlet doesn't do", (box, close) => {
+  })], ["What Microsim doesn't do", () => dialog("What Microsim doesn't do", (box, close) => {
     const list = el("ul");
     list.style.paddingLeft = "18px";
     for (const limit of [
@@ -2039,10 +2055,10 @@ const MENUS: Record<string, MenuItem[]> = {
       "Device models and logic levels are approximations, so results may differ from other simulators.",
     ]) list.append(el("li", { textContent: limit }));
     box.append(list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
-  })], ["About Ohmlet", () => dialog("Ohmlet", (box, close) => {
+  })], ["About Microsim", () => dialog("Microsim", (box, close) => {
     box.append(
       el("p", { textContent: "A lightweight circuit simulator with an AI assistant." }),
-      el("p", { className: "muted", textContent: "Ohmlet is an independent project and is not affiliated with or endorsed by National Instruments or Emerson." }),
+      el("p", { className: "muted", textContent: "Microsim is an independent project and is not affiliated with or endorsed by National Instruments or Emerson." }),
       el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })),
     );
   })]],
@@ -2092,7 +2108,7 @@ window.addEventListener("pointerdown", (e) => {
 const toolButton = (label: string, title: string, action: () => void) => el("button", { textContent: label, title, onclick: action });
 toolbar.append(
   toolButton("Open", "Open a circuit, including .ms14 files", () => void openCircuit()),
-  toolButton("Save", "Save as an Ohmlet circuit", () => void saveCircuit()),
+  toolButton("Save", "Save as an Microsim circuit", () => void saveCircuit()),
   el("span", { className: "sep" }),
   toolButton("Undo", "Undo", () => undoDocument()),
   toolButton("Redo", "Redo", () => undoDocument(true)),
@@ -2267,7 +2283,7 @@ if (!isTauri()) {
   void holdWorkerScript();
 }
 void guardWindowClose(() => doc.dirty, async () => {
-  const discard = await askConfirm("Unsaved changes", "Close Ohmlet and discard the changes to this circuit?", "Discard and close");
+  const discard = await askConfirm("Unsaved changes", "Close Microsim and discard the changes to this circuit?", "Discard and close");
   if (discard) {
     // They chose to lose it, so the next launch shouldn't offer it back.
     doc.dirty = false;
@@ -2279,7 +2295,7 @@ void guardWindowClose(() => doc.dirty, async () => {
 // In the desktop app the menus move to the Mac menu bar. Items that the Edit menu's standard
 // entries already cover are left out so they stay usable in text fields.
 const STANDARD_EDIT = new Set(["Undo", "Redo", "Copy", "Paste", "Select all"]);
-void installNativeMenu("Ohmlet", Object.fromEntries(Object.entries(MENUS).map(([title, items]) => [
+void installNativeMenu("Microsim", Object.fromEntries(Object.entries(MENUS).map(([title, items]) => [
   title,
   items
     .filter(([label]) => !(title === "Edit" && STANDARD_EDIT.has(label)))
@@ -2294,5 +2310,5 @@ void installNativeMenu("Ohmlet", Object.fromEntries(Object.entries(MENUS).map(([
 
 // Lets browser-driven tests find exact on-screen positions. Removed from production builds.
 if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__ohmlet = { doc, canvas, pinWorld, buildNetlist };
+  (window as unknown as Record<string, unknown>).__microsim = (window as unknown as Record<string, unknown>).__ohmlet = { doc, canvas, pinWorld, buildNetlist };
 }

@@ -1,11 +1,11 @@
 [package]
-name = "ohmlet"
+name = "microsim"
 version = "0.1.0"
 description = "Lightweight circuit simulator with an AI assistant"
 edition = "2021"
 
 [lib]
-name = "ohmlet_lib"
+name = "microsim_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

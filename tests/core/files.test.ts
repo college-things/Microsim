@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Doc } from "../../src/core/doc";
 import { parseDeck } from "../../src/core/deck";
 import { schematicToSvg } from "../../src/core/export";
-import { parseCircuit } from "../../src/core/file";
+import { parseCircuit, serializeCircuit } from "../../src/core/file";
 import { buildNetlist, deckUsesGround, placedBounds, readValue } from "../../src/core/netlist";
 import type { Schematic } from "../../src/core/schematic";
 
@@ -79,7 +79,11 @@ describe("opening a saved circuit", () => {
   it("only blames a newer version when the file is really from one", () => {
     expect(() => parseCircuit(JSON.stringify({ format: "ohmlet", version: 2, schematic: sheet }))).toThrow("newer version");
     expect(() => parseCircuit(JSON.stringify({ format: "kicad", version: 1, schematic: sheet }))).toThrow("not a valid circuit file");
+    expect(parseCircuit(JSON.stringify({ format: "microsim", version: 1, schematic: sheet })).schematic.name).toBe("a");
+    // Files saved before the rename still open.
     expect(parseCircuit(JSON.stringify({ format: "ohmlet", version: 1, schematic: sheet })).schematic.name).toBe("a");
+    expect(() => parseCircuit(JSON.stringify({ format: "other", version: 1, schematic: sheet }))).toThrow("not a Microsim circuit");
+    expect(JSON.parse(serializeCircuit({ schematic: sheet, analyses: [], issues: [] })).format).toBe("microsim");
   });
 });
 

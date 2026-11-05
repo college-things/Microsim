@@ -1,6 +1,6 @@
 // Editable document with undo. The canvas and the assistant both change circuits through this.
 import { PART_BY_KIND } from "./library";
-import { buildNetlist, connectivitySignature, onSegment, pinWorld, pointKey } from "./netlist";
+import { buildNetlist, connectivitySignature, looseNames, onSegment, pinWorld, pointKey } from "./netlist";
 import { emptySchematic, type FreeText, type NetLabel, type Point, type SchComponent, type Schematic, type Wire } from "./schematic";
 
 export { emptySchematic };
@@ -220,27 +220,32 @@ export class Doc {
     return this.schematic.components.find((c) => c.refDes.toUpperCase() === wanted);
   }
 
-  /** Draws an orthogonal wire between two pins. */
-  connectPins(a: SchComponent, pinA: string, b: SchComponent, pinB: string): Wire {
+  /** Draws an orthogonal wire between two pins. Returns undefined, changing nothing, if they're already connected. */
+  connectPins(a: SchComponent, pinA: string, b: SchComponent, pinB: string): Wire | undefined {
     const pa = a.pins.find((p) => p.name === pinA);
     const pb = b.pins.find((p) => p.name === pinB);
     if (!pa) throw new Error(`${a.refDes} has no pin "${pinA}". Pins: ${a.pins.map((p) => p.name).join(", ")}.`);
     if (!pb) throw new Error(`${b.refDes} has no pin "${pinB}". Pins: ${b.pins.map((p) => p.name).join(", ")}.`);
     const from = pinWorld(a, pa);
     const to = pinWorld(b, pb);
+    const { name, joined } = this.linkName(from, to);
+    if (joined) return undefined;
     const path = this.clearRoute(from, to);
     if (path && !this.wireProblem(path)) return this.addWire(path);
     // A crowded sheet may have no clean path, so labels make the same connection.
-    this.linkSpots(from, to, this.linkName(from, to).name);
+    this.linkSpots(from, to, name);
     return { id: "", points: [] };
   }
 
-  /** Joins two spots with visible labels, which can be seen and deleted, unlike a connection with nothing drawn. */
+  /**
+   * Joins two spots with visible labels, which can be seen and deleted, unlike a connection with
+   * nothing drawn. A spot already showing that name keeps its one label, or deleting it would seem to do nothing.
+   */
   private linkSpots(from: Point, to: Point, net: string): void {
-    this.schematic.labels.push(
-      { id: newId("l"), x: from.x, y: from.y, net },
-      { id: newId("l"), x: to.x, y: to.y, net },
-    );
+    for (const { x, y } of [from, to]) {
+      if (this.schematic.labels.some((l) => l.net === net && l.x === x && l.y === y && !l.hidden)) continue;
+      this.schematic.labels.push({ id: newId("l"), x, y, net });
+    }
   }
 
   /** What labels joining two spots should say: what their nets already go by, ground first, or else a new name. */
@@ -462,14 +467,28 @@ export class Doc {
         }
       }
       schematic.wires = [];
-      // Named nets stay named, on their first pin. A hidden link with no pin to hold names nothing.
+      // Named nets stay named, on their first pin, with one label however many it had spread around.
+      // A hidden link with no pin to hold names nothing. A name someone can see, with no pin on its
+      // net, goes below the circuit, as a part landing where it was would silently take that name.
+      const below = Math.max(bottom, ...[...pinsAt.values()].map((p) => p.y), ...schematic.components.map((c) => bodyBox(c).y1)) + 40;
+      const shown = new Set<string>();
+      const loose = new Set<string>();
+      let strays = 0;
       schematic.labels = schematic.labels.filter((label) => {
         const first = groups.get(was.namedNets.get(label.net)!)?.[0];
         if (first) {
           label.x = first.x;
           label.y = first.y;
+          const key = `${label.net}\n${Boolean(label.hidden)}`;
+          if (shown.has(key)) return false;
+          shown.add(key);
+          return true;
         }
-        return first || !label.hidden;
+        if (label.hidden) return false;
+        loose.add(label.net);
+        label.x = 0;
+        label.y = Math.ceil(below / 10) * 10 + 30 * strays++;
+        return true;
       });
       // Labels carry a net's name as it was given, not as SPICE spells it.
       const spelled = new Map([...was.namedNets].map(([name, net]) => [net, name]));
@@ -482,7 +501,9 @@ export class Doc {
       }
       const now = buildNetlist(schematic).pinNets;
       const namesKept = [...nets].every(([id, pins]) => [...pins].every(([pin, net]) => was.autoNets.has(net) || now.get(id)?.get(pin) === net));
-      return namesKept && connectivitySignature(schematic) === before;
+      // A name that was on no pin must still be on none, as the connection check doesn't read names.
+      const stillLoose = new Set(looseNames(schematic));
+      return namesKept && [...loose].every((name) => stillLoose.has(name)) && connectivitySignature(schematic) === before;
     });
   }
 

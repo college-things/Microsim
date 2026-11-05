@@ -1,4 +1,4 @@
-// Ohmlet simulation engine entry point. Synchronous and free of DOM and Node APIs,
+// Microsim simulation engine entry point. Synchronous and free of DOM and Node APIs,
 // so it can run inside a Web Worker.
 
 import { SimError, type AnalysisRequest, type LiveChunk, type LiveSession, type SimOptions, type SimResult } from "../core/sim";
