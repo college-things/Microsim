@@ -297,7 +297,7 @@ export class SchematicCanvas {
       this.onStatus("");
       this.doc.notify();
     } else {
-      this.doc.revert();
+      this.doc.forgetIfUnchanged();
       this.refuse(`${what} would change the part's connections, so it wasn't applied. Move the part somewhere clearer and try again.`);
     }
   }

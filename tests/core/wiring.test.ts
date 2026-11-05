@@ -176,6 +176,21 @@ describe("a wire with no clear path", () => {
     expect(doc.schematic.labels.map((l) => l.net)).toEqual(["my out", "my out", "my out"]);
   });
 
+  it("won't draw a route that only looks clear, through a pin just off the grid", () => {
+    const doc = new Doc();
+    const r1 = doc.addPart("resistor", 0, 0);
+    // Its pin rounds to the spot where the plain route turns, and the netlist joins by that rounding.
+    const r2 = doc.addPart("resistor", 200.3, 0);
+    const r3 = doc.addPart("resistor", 200, 100);
+    const plain = route(pin(r1, 1), pin(r3, 0));
+    expect(doc.clearRoute(pin(r1, 1), pin(r3, 0))).toEqual(plain);
+    expect(doc.wireProblem(plain)).toMatch(/R2 pin 1/);
+    doc.connectPins(r1, "2", r3, "1");
+    expect(doc.schematic.wires).toEqual([]);
+    expect(net(doc, r1, "2")).toBe(net(doc, r3, "1"));
+    expect(net(doc, r2, "1")).toBeUndefined();
+  });
+
   it("finds a net's name on the far side of a wire", () => {
     const { doc, r1, r2 } = blocked();
     const lead = doc.addWire([{ x: 200, y: 100 }, { x: 300, y: 100 }]);
@@ -803,6 +818,25 @@ describe("mirroring and turning a part teed into wires on both sides", () => {
       doc.transformParts = transform;
       canvas.rotateSelected();
       expect(status.text).toBe("");
+    });
+
+    it("leaves nothing behind when one is refused, not even a step to undo", () => {
+      const { doc, canvas } = sheet();
+      const r = doc.addPart("resistor", 0, 0);
+      canvas.select([r.id]);
+      doc.checkpoint();
+      doc.addPart("resistor", 0, 100);
+      doc.undo();
+      doc.dirty = false;
+      const schematic = doc.schematic;
+      const held = doc.schematic.components[0];
+      doc.transformParts = () => false;
+      canvas.rotateSelected();
+      expect(doc.schematic).toBe(schematic);
+      expect(doc.schematic.components[0]).toBe(held);
+      expect(doc.dirty).toBe(false);
+      doc.redo();
+      expect(doc.schematic.components).toHaveLength(2);
     });
   });
 });

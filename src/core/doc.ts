@@ -98,6 +98,15 @@ export class Doc {
     this.notify();
   }
 
+  /** Takes back the last checkpoint if nothing has changed since it, as after an edit that was refused. */
+  forgetIfUnchanged(): boolean {
+    if (this.undoStack[this.undoStack.length - 1] !== JSON.stringify(this.schematic)) return false;
+    this.undoStack.pop();
+    this.redoStack = this.redoBeforeEdit;
+    this.dirty = this.dirtyBeforeEdit;
+    return true;
+  }
+
   replace(schematic: Schematic): void {
     this.settle();
     this.schematic = schematic;
@@ -220,7 +229,7 @@ export class Doc {
     const from = pinWorld(a, pa);
     const to = pinWorld(b, pb);
     const path = this.clearRoute(from, to);
-    if (path) return this.addWire(path);
+    if (path && !this.wireProblem(path)) return this.addWire(path);
     // A crowded sheet may have no clean path, so labels make the same connection.
     this.linkSpots(from, to, this.linkName(from, to).name);
     return { id: "", points: [] };

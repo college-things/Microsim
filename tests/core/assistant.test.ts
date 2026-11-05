@@ -118,6 +118,53 @@ describe("assistant loop", () => {
     expect(result.content).toContain("No component named R9");
   });
 
+  it("leaves no undo step, and the redo history alone, when its only edit was refused", async () => {
+    const doc = new Doc();
+    doc.addPart("resistor", 0, 0);
+    doc.addPart("resistor", 300, 0);
+    doc.checkpoint();
+    doc.addPart("capacitor", 0, 200);
+    doc.undo();
+    doc.dirty = false;
+    const before = JSON.stringify(doc.schematic);
+    const schematic = doc.schematic;
+    // Landing R1's pin on R2's would connect them, so the move is refused.
+    script.push(
+      { stop_reason: "tool_use", content: [toolUse("x", "move_component", { ref: "R1", x: 240, y: 0 })] },
+      { stop_reason: "end_turn", content: [] },
+    );
+    await new Assistant(doc, run, () => "k").send("move R1", events());
+    expect(requests[1].messages.at(-1).content[0].is_error).toBe(true);
+    expect(doc.schematic).toBe(schematic);
+    expect(JSON.stringify(doc.schematic)).toBe(before);
+    expect(doc.dirty).toBe(false);
+    doc.redo();
+    expect(doc.schematic.components.map((c) => c.kind)).toEqual(["resistor", "resistor", "capacitor"]);
+    doc.undo();
+    doc.undo();
+    expect(doc.schematic.components.map((c) => c.kind)).toEqual(["resistor", "resistor"]);
+  });
+
+  it("makes one undo step of a turn whose first edit was refused and whose next one wasn't", async () => {
+    const doc = new Doc();
+    doc.addPart("resistor", 0, 0);
+    doc.addPart("resistor", 300, 0);
+    const before = JSON.stringify(doc.schematic);
+    script.push(
+      { stop_reason: "tool_use", content: [
+        toolUse("x", "move_component", { ref: "R1", x: 240, y: 0 }),
+        toolUse("y", "add_component", { kind: "capacitor", x: 0, y: 200 }),
+        toolUse("z", "add_component", { kind: "capacitor", x: 100, y: 200 }),
+      ] },
+      { stop_reason: "end_turn", content: [] },
+    );
+    await new Assistant(doc, run, () => "k").send("go on", events());
+    expect(doc.schematic.components).toHaveLength(4);
+    expect(doc.dirty).toBe(true);
+    doc.undo();
+    expect(JSON.stringify(doc.schematic)).toBe(before);
+  });
+
   it("rejects incomplete tool input without running the tool", async () => {
     const doc = new Doc();
     script.push(

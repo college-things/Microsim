@@ -9,7 +9,7 @@
     "build:web": "tsc --noEmit && vite build --mode web",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --testTimeout=60000",
     "tauri": "tauri"
   },
   "dependencies": {

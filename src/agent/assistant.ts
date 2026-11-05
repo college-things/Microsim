@@ -162,7 +162,8 @@ export class Assistant {
     const record = input as Record<string, unknown>;
     events.onTool(describe(name, record));
     // One undo step covers the whole turn, and a turn that changes nothing leaves none.
-    if (MUTATING_TOOLS.has(name) && !edit.checkpointed) {
+    const first = MUTATING_TOOLS.has(name) && !edit.checkpointed;
+    if (first) {
       this.doc.checkpoint();
       edit.checkpointed = true;
     }
@@ -176,6 +177,7 @@ export class Assistant {
       return { type: "tool_result", tool_use_id: id, is_error: true, content: text };
     } finally {
       this.simulating = false;
+      if (first && this.doc.forgetIfUnchanged()) edit.checkpointed = false;
     }
   }
 }
