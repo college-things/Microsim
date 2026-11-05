@@ -420,7 +420,7 @@ export function buildNetlist(doc: Schematic): NetlistResult {
     if (!comp.pins.length && deckUsesGround(template)) hasGround = true;
     if (!template.trim()) continue;
     for (const pin of comp.pins) {
-      if (!nets.has(pin.name)) warnings.push(`${comp.refDes || part?.name}: pin ${pin.name} is not connected.`);
+      if (!nets.has(pin.name) && !(pin.optional ?? part?.pins.find((p) => p.name === pin.name)?.optional)) warnings.push(`${comp.refDes || part?.name}: pin ${pin.name} is not connected.`);
     }
     lines.push(expand(template, comp, refs.get(comp.id)!, nets, params, unconnected));
     if (part?.definitions) definitions.add(part.definitions);

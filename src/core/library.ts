@@ -408,7 +408,7 @@ for (const [kind, name, base] of [
 }
 PARTS.push({
   kind:'mcu8051',name:'8051 firmware core',category:'Digital',prefix:'U',
-  pins:[...Array.from({length:32},(_,i)=>({name:`P${i>>>3}.${i&7}`,x:i<16?-90:90,y:(i%16)*15-112.5})),{name:'RST',x:0,y:145}],
+  pins:[...Array.from({length:32},(_,i)=>({name:`P${i>>>3}.${i&7}`,x:i<16?-90:90,y:(i%16)*15-112.5,optional:true})),{name:'RST',x:0,y:145}],
   params:[{key:'frequency',label:'Oscillator (Hz, classic 12 clocks/cycle)',default:'12Meg'},{key:'code',label:'Program bytes (hex)',default:'020000',text:true}],
   spice:`a{ref} [${Array.from({length:32},(_,i)=>`{pin:P${i>>>3}.${i&7}}`).join(' ')}] {pin:RST} MCU_{ref}\n.model MCU_{ref} d_mcu8051(program="{param:code}" frequency={param:frequency})`,
   graphics:[rect(-70,-130,140,260),text(-25,-140,'8051'),...Array.from({length:32},(_,i)=>[line(i<16?-90:70,(i%16)*15-112.5,i<16?-70:90,(i%16)*15-112.5),text(i<16?-65:38,(i%16)*15-109,`P${i>>>3}.${i&7}`,8)]).flat(),line(0,130,0,145),text(-10,125,'RST',8)],

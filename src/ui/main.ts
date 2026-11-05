@@ -2126,7 +2126,7 @@ const MENUS: Record<string, MenuItem[]> = {
     const list = el("ul");
     list.style.paddingLeft = "18px";
     for (const limit of [
-      "The built-in 8051 firmware core executes Intel HEX programs with GPIO and timers. Imported NI MCU models, PICs, LCDs and serial ports are still unsupported. UART, external bus waveforms and electrical chip power behavior are not implemented.",
+      "The built-in 8051 firmware core executes Intel HEX programs with GPIO, timers and its serial port; the Serial terminal instrument decodes what it sends. Imported NI MCU models, PICs, LCDs and NI serial-port parts are still unsupported. External bus waveforms and electrical chip power behavior are not implemented.",
       "Design > LabVIEW integration has an independent local numeric dataflow runtime and optional HTTP/native VI adapters. Local mode does not read .vi binaries. Native VI mode requires LabVIEW and is not yet verified against a real installation; synchronized NI co-simulation is not implemented.",
       "Design > Component database imports embedded .ms14 parts, catalogue JSON and supported installed NI Jet databases through the local bridge. NI's collection is not bundled; native graphics and generated instance parameters are not reproduced.",
       "Instruments are limited to oscilloscope, multimeter, wattmeter, Bode plotter, logic analyzer, function generator and clock.",

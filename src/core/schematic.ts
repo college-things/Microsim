@@ -23,6 +23,8 @@ export interface Pin {
    * ground, hidden power pins and connections restored from an imported file.
    */
   net?: string;
+  /** Leaving it unconnected is normal, such as a microcontroller's unused port pin, so it gets no warning. */
+  optional?: boolean;
 }
 
 export type InstrumentKind =
