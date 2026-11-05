@@ -11,6 +11,8 @@ import {boardFabricationFiles,fabricationZip} from '../core/fabrication';
 import { FlowRuntime } from '../core/dataflow';
 import { dataflowEditor } from './dataflow';
 import { readIntelHex, programHex } from '../engine/ihex';
+import { assemble51 } from '../engine/asm51';
+import { isMcu8051 } from '../importer/mcu';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text = "") => { const n = document.createElement(tag); n.textContent = text; return n; };
 const button = (text: string, action: () => void) => { const b = el("button", text); b.type = "button"; b.onclick = action; return b; };
@@ -151,7 +153,7 @@ export class DesignUI {
       const downloads = el("div"); downloads.className = "design-controls";
       const targetMcu=el('select');targetMcu.setAttribute('aria-label','Firmware target');
       const newMcu=el('option','Create 8051 firmware core');newMcu.value='';targetMcu.append(newMcu);
-      for(const comp of this.doc.schematic.components.filter(c=>c.kind==='mcu8051')){const option=el('option',comp.refDes);option.value=comp.id;targetMcu.append(option);}
+      for(const comp of this.doc.schematic.components.filter(isMcu8051)){const option=el('option',comp.refDes);option.value=comp.id;targetMcu.append(option);}
       const actions = el("div"); actions.className = "dialog-actions";
       const saveSource = () => this.commit((w) => {
         if (language === "c") w.firmware = { ...w.firmware, source: source.value, hex: w.firmware?.source === source.value ? w.firmware.hex : undefined };
@@ -198,7 +200,7 @@ export class DesignUI {
           try{
             const text=this.doc.schematic.workspace?.firmware?.hex;if(!text)throw new Error('Compile C or import a HEX file first.');
             const bytes=readIntelHex(text);let end=bytes.length;while(end>1&&bytes[end-1]===255)end--;
-            this.doc.checkpoint();let comp=this.doc.schematic.components.find(c=>c.id===targetMcu.value&&c.kind==='mcu8051');
+            this.doc.checkpoint();let comp=this.doc.schematic.components.find(c=>c.id===targetMcu.value&&isMcu8051(c));
             if(targetMcu.value&&!comp)throw new Error('The target MCU was removed.');
             if(!comp){comp=this.doc.addPart('mcu8051',0,0);const option=el('option',comp.refDes);option.value=comp.id;targetMcu.append(option);targetMcu.value=comp.id;}
             comp.params.code=programHex(bytes.slice(0,end));this.doc.notify();output.textContent=`Firmware attached to ${comp.refDes}. Run a transient analysis to execute it. Oscillator defaults to 12 MHz (12 clocks per machine cycle). P0 is open drain; P1–P3 have weak pull-ups. RST is active high. UART, external bus waveforms and chip power behavior are not implemented. Imported NI MCU components are not converted.`;
@@ -209,6 +211,61 @@ export class DesignUI {
       if (language === "vhdl") box.append(el("label", "PCF constraints (HX1K TQ144)"), constraints);
       box.append(output, downloads, actions);
     }, () => abort?.abort());
+  }
+  /** Loads assembly source or Intel HEX into a built-in or converted NI 8051, with no external tools. */
+  mcuProgram() {
+    this.dialog("Microcontroller program", (box, close) => {
+      box.classList.add("design-dialog");
+      const parts = this.doc.schematic.components.filter(isMcu8051);
+      if (!parts.length) {
+        box.append(el("p", "This circuit has no 8051 microcontroller. Place an 8051 firmware core from the Digital palette, or open a Multisim circuit that has an 8051 or 8052."));
+        const actions = el("div"); actions.className = "dialog-actions"; actions.append(button("Close", close)); box.append(actions);
+        return;
+      }
+      box.append(el("p", "Assemble classic Intel-syntax 8051 source (as written for Multisim's MCU workspaces) or load an Intel HEX file. Assembly runs here, with no other software. Generic JMP and CALL assemble as LJMP and LCALL, which take the same time as the short forms."));
+      const config = el("div"); config.className = "design-controls";
+      const target = el("select"); target.setAttribute("aria-label", "Microcontroller");
+      for (const comp of parts) { const option = el("option", `${comp.refDes}${comp.params.mcu === "8051" ? " (imported NI part)" : ""}`); option.value = comp.id; target.append(option); }
+      config.append(target);
+      const expected = el("p"); expected.className = "muted";
+      const source = el("textarea"); source.className = "design-source"; source.setAttribute("aria-label", "8051 assembly source");
+      const output = el("pre"); output.className = "design-status";
+      const current = () => this.doc.schematic.components.find((c) => c.id === target.value);
+      const describe = () => {
+        const comp = current();
+        if (!comp) return;
+        const where = comp.params.workspace ? ` Its Multisim workspace is ${comp.params.workspace}${comp.params.sources ? `; the program is ${comp.params.sources.split(";").join(" or ")} in that workspace's project folder` : ""}.` : "";
+        expected.textContent = `${comp.refDes} runs at ${comp.params.frequency ?? "12Meg"} Hz.${where}`;
+        source.value = comp.params.asm ?? "";
+        const bytes = (comp.params.code ?? "").length / 2;
+        output.textContent = bytes ? `${comp.refDes} holds a ${bytes}-byte program.` : `${comp.refDes} has no program yet.`;
+      };
+      target.onchange = describe;
+      const load = (code: Uint8Array, asm: string | undefined, note: string) => {
+        const comp = current();
+        if (!comp) throw new Error("The microcontroller was removed.");
+        let end = code.length; while (end > 1 && code[end - 1] === 255) end--;
+        this.doc.checkpoint();
+        comp.params.code = programHex(code.slice(0, end));
+        if (asm === undefined) delete comp.params.asm; else comp.params.asm = asm;
+        this.doc.notify();
+        output.textContent = `${note} ${end} bytes loaded into ${comp.refDes}. Run the circuit to execute it.`;
+      };
+      const assemble = () => {
+        try { const result = assemble51(source.value); load(result.code, source.value, `Assembled ${result.listing.length} instructions.`); }
+        catch (e) { output.textContent = `Not loaded. ${e instanceof Error ? e.message : String(e)}`; }
+      };
+      const actions = el("div"); actions.className = "dialog-actions";
+      actions.append(
+        button("Close", close),
+        button("Open .asm file…", () => { void (async () => { try { const file = await openFile(["asm", "a51", "s", "txt"]); if (!file) return; source.value = new TextDecoder("latin1").decode(file.bytes); assemble(); } catch (e) { output.textContent = String(e); } })(); }),
+        button("Assemble and load", assemble),
+        button("Load Intel HEX…", () => { void (async () => { try { const file = await openFile(["hex", "ihx"]); if (!file) return; load(readIntelHex(new TextDecoder().decode(file.bytes)), undefined, "HEX checked."); } catch (e) { output.textContent = String(e); } })(); }),
+        button("Remove program", () => { const comp = current(); if (!comp) return; this.doc.checkpoint(); comp.params.code = ""; delete comp.params.asm; this.doc.notify(); describe(); }),
+      );
+      box.append(config, expected, source, output, actions);
+      describe();
+    });
   }
   components() {
     this.dialog("Component database", (box, close) => {

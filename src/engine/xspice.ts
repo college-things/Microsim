@@ -253,7 +253,9 @@ export function buildXspice(h: XHost, ports: XPort[], m: XModel): boolean {
     case 'd_mcu8051': {
       if(ports.length!==2||flatten(ports[0]).length!==32||flatten(ports[1]).length!==1)throw new Error('8051: expected 32 port pins and a reset pin.');
       const program=m.str('program',''),frequency=m.num('frequency',12e6);
-      if(!program.length||program.length>131072||program.length%2||!/^[\da-f]+$/i.test(program))throw new Error('8051: program must be 1–65536 hexadecimal bytes.');
+      // No program loaded yet: the chip holds still and its pins float. The app reports this separately.
+      if(!program.length)return true;
+      if(program.length>131072||program.length%2||!/^[\da-f]+$/i.test(program))throw new Error('8051: program must be 1–65536 hexadecimal bytes.');
       if(!Number.isFinite(frequency)||frequency<12||frequency>100e6)throw new Error('8051: oscillator must be 12 Hz–100 MHz.');
       const code=Uint8Array.from(program.match(/../g)!,b=>parseInt(b,16));
       const pins=flatten(ports[0]).map(h.ref),reset=h.ref(flatten(ports[1])[0]);

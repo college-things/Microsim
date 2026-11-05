@@ -232,7 +232,9 @@ export function serializeNativeMs14(file: CircuitFile): Uint8Array {
     if (!original) return unsupported();
     const { params: _, displayValue: _display, ...rest } = c, { params: __, displayValue: _oldDisplay, ...before } = original;
     if (JSON.stringify(rest) !== JSON.stringify(before)) unsupported();
-    if (JSON.stringify(c.params) === JSON.stringify(original.params)) continue;
+    // A converted NI microcontroller's program lives in the editor extension; NI loads its own from the workspace.
+    const nativeParams = (p: Record<string, string>) => Object.fromEntries(Object.entries(p).filter(([key]) => !(c.params.mcu === "8051" && (key === "code" || key === "asm"))));
+    if (JSON.stringify(nativeParams(c.params)) === JSON.stringify(nativeParams(original.params))) continue;
     const binding = original.nativeMs14;
     if (!binding) return unsupported();
     const identity = `${binding.sheet}/${binding.component}`;
@@ -245,7 +247,7 @@ export function serializeNativeMs14(file: CircuitFile): Uint8Array {
     const parameters = path(kids(child(part, "Attributes"))[2]?.children[0], "parameters");
     const doubles = path(kids(child(part, "Attributes"))[2]?.children[0], "doubles");
     for (const key of new Set([...Object.keys(c.params), ...Object.keys(original.params)])) {
-      if (c.params[key] === original.params[key]) continue;
+      if (c.params[key] === original.params[key] || (c.params.mcu === "8051" && (key === "code" || key === "asm"))) continue;
       if (!/^p\d+$/.test(key) || c.params[key] === undefined) return unsupported();
       const entry = parameters?.children[Number(key.slice(1))];
       if (!entry) return unsupported();

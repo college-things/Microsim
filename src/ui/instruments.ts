@@ -752,7 +752,7 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
     if (screen.textContent !== text) { screen.textContent = text; screen.scrollTop = screen.scrollHeight; }
     detail.textContent = describe() + (errors ? ` ${errors} frame error${errors === 1 ? "" : "s"} (shown as �).` : "");
   };
-  const rxNet = (run: RunData) => run.pinNets.get(comp.id)?.get("RX");
+  const rxNet = (run: RunData) => run.pinNets.get(comp.id)?.get("RX") ?? run.pinNets.get(comp.id)?.get("RXD");
   return {
     element: win.root,
     follow(part) {

@@ -2047,6 +2047,7 @@ const MENUS: Record<string, MenuItem[]> = {
     ["LabVIEW integration...", () => design.labview()],
     ["VHDL / FPGA design...", () => design.compiler("vhdl")],
     ["Component database...", () => design.components()],
+    ["Microcontroller program...", () => design.mcuProgram()],
     ["C compiler (8051)...", () => design.compiler("c")],
   ],
   Edit: [

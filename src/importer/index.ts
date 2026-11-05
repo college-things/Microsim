@@ -40,6 +40,7 @@ import { displayText, normalizeStoredValue, singleLine } from "./values";
 import { bytesToText, child, kids, parseXml, path, textValue, walk, type XmlNode } from "./xml";
 
 export { decodeContainer } from "./container";
+import { convertNiMcus } from "./mcu";
 
 const MAX_DEPTH = 16;
 const MAX_COMPONENTS = 200_000;
@@ -1539,8 +1540,10 @@ function importUnchecked(bytes: Uint8Array, retainSource: boolean): { result: Im
   const fixedText = components.filter((c) => c.spice && !c.spice.includes("{ref}")).length;
   if (fixedText) issues.push({ severity: "info", message: `Template: ${fixedText} part(s) hold SPICE text with fixed device and net names, so a second copy on the sheet would clash with the first.` });
 
+  const xmlText = bytesToText(xmlBytes);
+  convertNiMcus(components, xmlText, issues);
   const schematic = { name, components, wires, labels, texts, definitions: definitionLines.join("\n") };
-  if (retainSource) Object.assign(schematic, { nativeMs14: { xml: bytesToText(xmlBytes), baseline: JSON.stringify(schematic) } });
+  if (retainSource) Object.assign(schematic, { nativeMs14: { xml: xmlText, baseline: JSON.stringify(schematic) } });
   return {
     result: {
       schematic,
