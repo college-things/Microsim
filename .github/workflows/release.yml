@@ -1,0 +1,101 @@
+name: Release
+
+# A tag such as v0.9.0 builds every platform. Windows and Linux installers go to a draft
+# GitHub release. The macOS app is built unsigned here and uploaded as an artifact: it is
+# signed with the Developer ID and notarized on the maintainer's Mac (scripts/sign-macos.sh),
+# then the signed .dmg is added to the same draft release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: ""
+          - os: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      - run: npm test
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: Microsim ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
+          args: ${{ matrix.args }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Microsim-${{ runner.os }}
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/rpm/*.rpm
+          if-no-files-found: ignore
+
+  macos-unsigned:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npm test
+      - run: npx tauri build --target universal-apple-darwin --bundles app
+      # ditto keeps symlinks, permissions and extended attributes that codesign relies on.
+      - run: ditto -c -k --keepParent src-tauri/target/universal-apple-darwin/release/bundle/macos/Microsim.app Microsim-macOS-unsigned.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Microsim-macOS-unsigned
+          path: Microsim-macOS-unsigned.zip
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:web
+      - run: cd dist && zip -r ../Microsim-web.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Microsim-web
+          path: Microsim-web.zip

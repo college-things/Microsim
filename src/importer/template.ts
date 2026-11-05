@@ -1,4 +1,4 @@
-// Turns a stored SPICE template into Ohmlet's {ref}/{pin:NAME}/{param:NAME} form.
+// Turns a stored SPICE template into Microsim's {ref}/{pin:NAME}/{param:NAME} form.
 //
 // Stored tokens, worked out by comparing templates, parameter lists and displayed values:
 //   %p             reference designator
@@ -21,7 +21,7 @@ export interface TemplateInput {
   modelName?: string;
   /** Pin names as the component knows them, used to find where a %t pin name ends. */
   pinNames: string[];
-  /** Renames a stored pin in the output, for parts whose pins Ohmlet names differently. */
+  /** Renames a stored pin in the output, for parts whose pins Microsim names differently. */
   pinAlias?: (name: string) => string;
   /** Rewrites a stored string, for behavioural expressions that name sheet-level nets and parts. */
   mapString?: (text: string) => string;

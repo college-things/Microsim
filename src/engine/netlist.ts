@@ -621,8 +621,11 @@ export function elaborate(deck: Deck): Circuit {
   elaborateScope(c, top, 0);
   for (const job of c.deferred) job();
   addSenseSources(c);
+  // Logic and control inputs aren't analog pins, but the net is still connected to them.
+  const references = new Uint32Array(c.names.length);
+  for (const id of c.nodeLog) references[id]!++;
   for (let i = 1; i < c.names.length; i++) {
-    if (c.isNode[i] && c.pins[i] === 1 && !/#|(^|.)nc_/.test(c.names[i]!)) {
+    if (c.isNode[i] && c.pins[i] === 1 && references[i] === 1 && !/#|(^|.)nc_/.test(c.names[i]!)) {
       c.warn(`Node '${c.names[i]}' has only one device connection`);
     }
   }
@@ -1644,12 +1647,14 @@ function laplaceRational(text: string, env: Env, line: number): { num: number[];
 /** Host interface for generating devices in this scope. */
 function xHost(c: Circuit, env: Env, card: Card, name: string, depth: number): XHost {
   const line = card.line;
+  let unconnected = 0;
   return {
     c,
     name,
     line,
     raw: card.raw,
-    ref: (node) => env.nodeRef(c, node),
+    // NULL leaves a port unconnected, so each one is its own hidden net rather than a net called null.
+    ref: (node) => (node === "null" ? c.internalNode(`${name}#null${unconnected++}`) : env.nodeRef(c, node)),
     pin: (node) => env.pin(c, node),
     value: (tok) => env.value(tok, line),
     emit: (text) => {

@@ -22,7 +22,7 @@ export function decodeContainer(bytes: Uint8Array): Uint8Array {
   if (!startsWith(bytes, MAGIC)) {
     // Not seen in the samples, but cheap to accept: the same XML stored uncompressed.
     if (startsWith(bytes, "<?xml") || startsWith(bytes, "<MSMElectronicsWorkbench")) return bytes;
-    throw new Error("Not a Multisim circuit file: bad magic.");
+    throw new Error("Not a Multisim circuit file.");
   }
   if (bytes.length < HEADER_SIZE) throw new Error("Corrupt circuit file: truncated header.");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);

@@ -26,8 +26,12 @@ export type LiveCommand =
   | { type: "ack" }
   /** Simulated seconds per real second. Absent runs as fast as the machine can. */
   | { type: "rate"; rate?: number }
+  /** Stop here instead, in simulated seconds. Absent runs until stopped. */
+  | { type: "stopAt"; stopAt?: number }
   /** Applies changed values to the running circuit, keeping its state. */
-  | { type: "update"; id: number; netlist: string };
+  | { type: "update"; id: number; netlist: string }
+  /** Bytes typed into a serial input (a d_uart_tx instance), sent from the current simulated time. */
+  | { type: "send"; device: string; bytes: number[] };
 
 function runJob({ id, netlist, request }: WorkerJob): void {
   try {
@@ -82,6 +86,13 @@ function step(): void {
   const live = session;
   if (!live) return;
   try {
+    // A stop time moved to before where the run has got to ends it there, with nothing more to show.
+    if (stopAt !== undefined && live.time >= stopAt * (1 - 1e-12)) {
+      const nothing = () => new Float64Array(0);
+      self.postMessage({ type: "chunk", time: nothing(), values: indices.map(nothing), simTime: live.time, finished: true });
+      session = undefined;
+      return;
+    }
     let target: number;
     if (rate === undefined) {
       // Unpaced: a generous horizon, with the time budget deciding how far it really gets.
@@ -132,6 +143,9 @@ function runLive(message: LiveCommand): void {
     }
   } else if (message.type === "rate") {
     setPace(message.rate);
+  } else if (message.type === "stopAt") {
+    // The next step, never more than a chunk away, acts on it.
+    stopAt = message.stopAt;
   } else if (message.type === "update") {
     let applied = false;
     try {
@@ -140,6 +154,8 @@ function runLive(message: LiveCommand): void {
       // The caller falls back to a restart, which reports any real problem with the circuit.
     }
     self.postMessage({ type: "updated", id: message.id, applied });
+  } else if (message.type === "send") {
+    session?.send(message.device, message.bytes);
   } else {
     step();
   }

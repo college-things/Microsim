@@ -29,5 +29,6 @@ describe.skipIf(!existsSync(ROOT))("imported geometry", () => {
       }
     }
     expect(bad.slice(0, 10)).toEqual([]);
-  });
+    // Importing every sample takes a few seconds, and more on a busy machine.
+  }, 60_000);
 });

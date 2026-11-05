@@ -1,8 +1,8 @@
-# Ohmlet
+# Microsim
 
-A lightweight desktop circuit simulator with an AI assistant. It can open `.ms14` circuit files.
+A lightweight circuit simulator with an AI assistant, for the browser and the Mac desktop. It can open `.ms14` circuit files.
 
-Ohmlet is an independent project. It is not affiliated with or endorsed by National Instruments or Emerson. Multisim is a trademark of its owner, and is named here only to describe file compatibility.
+Microsim is an independent project. It is not affiliated with or endorsed by National Instruments or Emerson. Multisim is a trademark of its owner, and is named here only to describe file compatibility.
 
 ## Develop
 
@@ -23,6 +23,18 @@ npm run typecheck
 ```
 
 Tests that read `.ms14` samples use a local Circuit Design Suite install and skip when it is absent. No vendor files or models are stored in this repository.
+
+## Build the website
+
+```bash
+npm run build:web
+```
+
+```bash
+npm run preview
+```
+
+The site is static files in `dist`, and circuits are simulated and stay in the browser. The `Deploy website` workflow in GitHub Actions publishes it to GitHub Pages when run by hand.
 
 ## Build the Mac app
 
@@ -56,19 +68,22 @@ Or run the `Build macOS app` workflow in GitHub Actions, which uploads a `.dmg`.
 
 ## Using it
 
-See **Help > Getting started** in the app. Ohmlet opens `.ohmlet` circuits, `.ms14` files, and plain SPICE decks (`.cir`, `.sp`). Files from other Multisim versions (`.ms10` to `.ms13`) can be opened but are untested. It saves only to `.ohmlet`, and exports SVG, SPICE netlists and CSV.
+See **Help > Getting started** in the app. Microsim opens `.microsim` circuits (and `.ohmlet` ones saved before the rename), `.ms14` files, and plain SPICE decks (`.cir`, `.sp`). Files from other Multisim versions (`.ms10` to `.ms13`) can be opened but are untested. It saves `.microsim` files and can write `.ms14` through **File > Save as .ms14**. It also exports SVG, SPICE netlists, CSV and a KiCad PCB board. Imported `.ms14` circuits can retain native records and supported parameter edits (checked in Multisim 14.2). All seven new starter circuits opened in Multisim 14.2, including verified native RC connectivity and ground; a generated RC circuit also entered native transient simulation. Imported structural edits can use the explicit flattened `.ms14` export; unknown native behavior is not recreated. Native simulation equivalence remains unverified. On the website, Save downloads a new file each time and Save as asks for its name, because a browser can't overwrite the file you opened. The website is made for a computer. On a phone it opens and runs circuits and shows the results, but editing by touch is awkward.
 
 ## What it doesn't do
 
-Ohmlet covers analog and basic digital simulation, not everything Multisim does. It doesn't simulate microcontrollers, LCDs or serial ports, or support LabVIEW co-simulation. There's no component database, so real parts come from pasting their SPICE models. It has fewer instruments and analyses, flattens hierarchical sheets, and has no PCB flow. **Help > What Ohmlet doesn't do** has the full list. Circuits containing microcontrollers, LCDs or serial ports show a notice when opened, and other import limits are listed in the Issues tab.
+Microsim covers analog and basic digital simulation. The **Design** menu adds PCB editing and fabrication export, an editable local dataflow controller, optional LabVIEW HTTP/native VI links, a component catalogue with installed NI database import, and build integration for 8051 C and VHDL/iCE40 FPGA designs. The local dataflow controller runs without NI software. C and FPGA builds use separately installed SDCC and GHDL/Yosys/nextpnr tools. Native VI execution requires LabVIEW; synchronized NI co-simulation is not implemented. The palette includes original tank/conveyor models and Agilent/Tektronix style instruments. These workflows are not full Multisim or LabVIEW equivalents. Compiled or imported Intel HEX runs on the independent built-in 8051 core with GPIO, timers and interrupts. Imported NI MCU parts, PICs, LCDs and serial ports remain unsupported. Imported hierarchical sheets are flattened. See [design workflows](docs/design-workflows.md) and **Help > What Microsim doesn't do** for supported behavior and remaining limits.
 
 ## Assistant
 
-The assistant needs an Anthropic API key, entered in its Settings. The key is kept unencrypted in the app's local storage. The circuit, including any model text from files you imported, and your messages are sent to Anthropic only when you use the assistant. Check that you may share a vendor's model before using the assistant on a circuit that contains it.
+The assistant needs an Anthropic API key, entered in its Settings. The desktop app keeps the key unencrypted in its local storage, and the website keeps it only until the tab closes. The circuit, including any model text from files you imported, and your messages are sent to Anthropic only when you use the assistant. Check that you may share a vendor's model before using the assistant on a circuit that contains it.
+
+See [docs/limits.md](docs/limits.md) for the full list of what can't be done, what is only approximate, and what still needs a person.
 
 ## Before a public release
 
 - Test by hand on a real Mac. The app builds and launches on GitHub's macOS runner, but that's no substitute for someone using it.
-- Add an Apple Developer ID. The workflow reads the `APPLE_*` secrets it needs for signing and notarization. Until then builds are only ad-hoc signed, so macOS warns people who download them. To open one anyway, right-click the app and choose Open, or if macOS says it's damaged, run `xattr -cr /Applications/Ohmlet.app`.
+- Add an Apple Developer ID. The workflow reads the `APPLE_*` secrets it needs for signing and notarization. Until then builds are only ad-hoc signed, so macOS warns people who download them. To open one anyway, right-click the app and choose Open, or if macOS says it's damaged, run `xattr -cr /Applications/Microsim.app`.
+- Clear the name. `Microsim` is close to Multisim, and MicroSim was the name of the company behind PSpice, with a past trademark for circuit design software. Check its current status before release.
 - Have counsel review `.ms14` support and `docs/ms14-format.md` against the vendor's license terms, how close the interface is to Multisim's, and vendor model text being stored in saved files and sent to the assistant.
 - Choose a license for this project, and add third-party notices for its dependencies.

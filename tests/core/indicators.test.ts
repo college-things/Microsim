@@ -16,6 +16,13 @@ const part = (indicator: IndicatorSpec | undefined, kind = "imported"): SchCompo
 const nets = (map: Record<string, string>) => new Map(Object.entries(map));
 
 describe("indicators", () => {
+  it('animates machine state from the latest simulation outputs with physical units',()=>{
+    const tank=part({kind:'voltmeter',pins:['LEVEL','GND'],reads:'voltage'},'holding-tank');tank.params.capacity='10';
+    expect(readIndicator(tank,result({'v(level)':4}),nets({LEVEL:'level',GND:'0'}),'X1')).toEqual({machine:{kind:'tank',fraction:0.4},text:'4 L'});
+    const belt=part({kind:'voltmeter',pins:['POSITION','GND'],reads:'voltage'},'conveyor');belt.params.length='5';
+    expect(readIndicator(belt,result({'v(position)':2}),nets({POSITION:'position',GND:'0'}),'X2')).toEqual({machine:{kind:'conveyor',fraction:0.4},text:'2 m'});
+    expect(readIndicator(tank,result({}),nets({LEVEL:'level',GND:'0'}),'X1')).toBeUndefined();
+  });
   it("lights a library LED only when forward biased", () => {
     const led = part(undefined, "led");
     const n = nets({ A: "a", K: "0" });

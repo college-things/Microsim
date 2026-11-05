@@ -101,6 +101,8 @@ export interface LiveSession {
    * should then restart. A failure to converge at the new values is thrown by the next advance.
    */
   update(netlist: string): boolean;
+  /** Queues bytes on a serial input (a d_uart_tx instance, by name). Returns false when there is none. */
+  send(device: string, bytes: number[]): boolean;
 }
 
 export class SimError extends Error {

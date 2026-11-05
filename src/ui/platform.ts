@@ -1,11 +1,16 @@
 // Desktop integration. The native shell uses real dialogs and menus; the browser build uses web APIs.
-const isTauri = () => "__TAURI_INTERNALS__" in window;
+export const isTauri = () => "__TAURI_INTERNALS__" in window;
+export const isMac = () => navigator.platform.toLowerCase().includes("mac");
 
 export interface OpenedFile {
   name: string;
   path?: string;
   bytes: Uint8Array;
 }
+
+// WebKit collects an input nothing refers to while its picker is open, and the chosen file is
+// then lost with no error. This also covers browsers that never report a cancelled picker.
+let pickerInput: HTMLInputElement | undefined;
 
 export async function openFile(extensions: string[]): Promise<OpenedFile | undefined> {
   if (isTauri()) {
@@ -15,37 +20,54 @@ export async function openFile(extensions: string[]): Promise<OpenedFile | undef
     if (typeof path !== "string") return undefined;
     return { name: path.split(/[\\/]/).pop() ?? path, path, bytes: await readFile(path) };
   }
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const input = document.createElement("input");
+    pickerInput = input;
     input.type = "file";
     input.accept = extensions.map((e) => `.${e}`).join(",");
     input.onchange = async () => {
       const file = input.files?.[0];
-      resolve(file ? { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } : undefined);
+      try {
+        resolve(file ? { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) } : undefined);
+      } catch (error) {
+        reject(error);
+      }
+      if (pickerInput === input) pickerInput = undefined;
     };
-    input.oncancel = () => resolve(undefined);
+    input.oncancel = () => {
+      resolve(undefined);
+      if (pickerInput === input) pickerInput = undefined;
+    };
     input.click();
   });
 }
 
 /** Asks where to save, unless `path` says. Returns the path used, or undefined if cancelled. */
-export async function saveFile(suggestedName: string, extension: string, contents: string, path?: string): Promise<string | undefined> {
+export async function saveFile(suggestedName: string, extension: string, contents: string | Uint8Array, path?: string): Promise<string | undefined> {
   if (isTauri()) {
     const { save } = await import("@tauri-apps/plugin-dialog");
-    const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+    const { writeTextFile, writeFile } = await import("@tauri-apps/plugin-fs");
     const target = path ?? await save({ defaultPath: suggestedName, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
     if (!target) return undefined;
-    await writeTextFile(target, contents);
+    if (typeof contents === "string") await writeTextFile(target, contents);
+    else await writeFile(target, contents);
     return target;
   }
-  // Browsers offer no save confirmation, so this reports the download as started.
+  // Browsers offer no save confirmation, so all this knows is that a download was started. A
+  // browser may ask first, and the file has to stay available for as long as that takes.
   const url = URL.createObjectURL(new Blob([contents], { type: "application/octet-stream" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = suggestedName;
   link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
   return suggestedName;
+}
+
+/** The Mac menu bar's spelling of a shortcut. Plain keys go through keydown, so they get none. */
+export function nativeAccelerator(shortcut: string | undefined): string | undefined {
+  if (!shortcut || !/(Cmd|Ctrl)\+/.test(shortcut)) return undefined;
+  return shortcut.replace(/^(Cmd|Ctrl)/, "CmdOrCtrl").replace(/Return$/, "Enter");
 }
 
 export interface NativeMenuItem {

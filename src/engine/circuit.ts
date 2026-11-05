@@ -1,3 +1,4 @@
+import type { UartTx } from './uart-tx';
 // Shared simulation state read and written by device models.
 
 import { SparseMatrix } from "./sparse";
@@ -38,6 +39,10 @@ export abstract class Device {
   abstract loadAc(c: Circuit): void;
   /** Report noise sources at frequency f, using values from the last load. */
   noise(_f: number, _sink: NoiseSink): void {}
+  /** The two nodes this device holds together at DC by a resistance or a set voltage, if any. */
+  dcPath(): [number, number] | null {
+    return null;
+  }
   /** Take over the state that outlives a solve from the same device in an earlier circuit. */
   copyState(_old: Device): void {}
   /** Commit an accepted solution. */
@@ -94,6 +99,8 @@ export class Circuit {
 
   readonly devices: Device[] = [];
   readonly named = new Map<string, Device>();
+  /** Serial inputs a live run can type into, by lower-case instance name. */
+  readonly serialInputs = new Map<string, UartTx>();
   readonly warnings: string[] = [];
   private readonly warned = new Set<string>();
 
@@ -244,12 +251,17 @@ export class Circuit {
     this.mat = new SparseMatrix(this.n);
     this.mat.isNode = (i) => this.isNode[i] === true;
     for (const d of this.devices) d.setup(this);
-    this.gminSlots = new Int32Array(this.n);
-    let count = 0;
+    const tied = this.nodesTiedToGround();
+    const all: number[] = [];
+    const floating: number[] = [];
     for (let i = 1; i <= this.n; i++) {
-      if (this.isNode[i]) this.gminSlots[count++] = this.mat.slot(i, i);
+      if (!this.isNode[i]) continue;
+      const slot = this.mat.slot(i, i);
+      all.push(slot);
+      if (!tied[i]) floating.push(slot);
     }
-    this.gminSlots = this.gminSlots.slice(0, count);
+    this.nodeSlots = Int32Array.from(all);
+    this.gminSlots = Int32Array.from(floating);
     this.mat.freeze();
     this.vals = this.mat.re;
     this.imag = this.mat.im;
@@ -264,7 +276,29 @@ export class Circuit {
     this.st2 = new Float64Array(this.stateCount);
   }
 
+  /** The diagonal of every node, which GMIN stepping raises to help a hard solve along. */
+  nodeSlots: Int32Array = new Int32Array(0);
+  /**
+   * The diagonal of the nodes GMIN applies to. A linear circuit only needs it where a node has no
+   * DC path to ground, and on any other node it would read wrong beside a large resistor. Circuits
+   * with semiconductors keep it everywhere: many settle on values that depend on it.
+   */
   gminSlots: Int32Array = new Int32Array(0);
+
+  /** Which unknowns reach ground through devices with a dcPath. Nothing does in a nonlinear circuit. */
+  private nodesTiedToGround(): boolean[] {
+    if (this.digital || this.devices.some((d) => !d.linear)) return [];
+    const parent = Array.from({ length: this.n + 1 }, (_, i) => i);
+    const root = (i: number): number => {
+      while (parent[i] !== i) i = parent[i] = parent[parent[i]!]!;
+      return i;
+    };
+    for (const d of this.devices) {
+      const path = d.dcPath();
+      if (path) parent[root(path[0])] = root(path[1]);
+    }
+    return parent.map((_, i) => root(i) === root(0));
+  }
 
   /** Record charge q in state pair o and return the integrated current. */
   integ(o: number, q: number): number {

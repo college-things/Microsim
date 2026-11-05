@@ -1,4 +1,4 @@
-// Parts a circuit can contain that Ohmlet draws but doesn't simulate. People need to hear
+// Parts a circuit can contain that Microsim draws but doesn't simulate. People need to hear
 // about these directly, because the rest of the circuit still runs and looks fine.
 import type { ImportIssue, Schematic } from "./schematic";
 
@@ -26,13 +26,20 @@ export function unsimulatedParts(doc: Schematic): string[] {
     if (!found.has(kind)) found.set(kind, []);
     if (comp.refDes) found.get(kind)!.push(comp.refDes);
   }
-  return [...found].map(([kind, refs]) => {
+  const notices = [...found].map(([kind, refs]) => {
     const noun = kind.replace(/^an? /, "");
     if (refs.length > 1) {
-      return `${refs.join(", ")} are each ${kind}, which Ohmlet doesn't simulate. They do nothing here, so anything that depends on them, or on a program running on them, won't respond.`;
+      return `${refs.join(", ")} are each ${kind}, which Microsim doesn't simulate. They do nothing here, so anything that depends on them, or on a program running on them, won't respond.`;
     }
-    return `${refs[0] ?? "A part"} is ${kind}, which Ohmlet doesn't simulate. This ${noun} does nothing here, so anything that depends on it, or on a program running on it, won't respond.`;
+    return `${refs[0] ?? "A part"} is ${kind}, which Microsim doesn't simulate. This ${noun} does nothing here, so anything that depends on it, or on a program running on it, won't respond.`;
   });
+  // A microcontroller that runs on the built-in core but has no program yet.
+  for (const comp of doc.components) {
+    if (!(comp.kind === "mcu8051" || comp.params.mcu === "8051") || (comp.params.code ?? "").trim()) continue;
+    const source = comp.params.sources ? ` (${comp.params.sources.split(";").join(" or ")})` : "";
+    notices.push(`${comp.refDes || "A microcontroller"} has no program loaded${source}, so it does nothing. Load one with Design > Microcontroller program.`);
+  }
+  return notices;
 }
 
 export function limitIssues(doc: Schematic): ImportIssue[] {

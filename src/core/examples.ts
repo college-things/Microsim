@@ -1,5 +1,6 @@
 // Starter circuits, drawn for this app and built through the same API as the editor.
 import { Doc } from "./doc";
+import { assemble51 } from "../engine/asm51";
 import type { Schematic } from "./schematic";
 
 export interface Example {
@@ -91,31 +92,37 @@ export const EXAMPLES: Example[] = [
   {
     name: "Full-wave rectifier",
     build(doc) {
-      const gen = doc.addPart("vsin", -260, 0, { amp: "12", freq: "60" });
-      const d1 = doc.addPart("diode", -120, -80);
-      const d2 = doc.addPart("diode", 40, -80);
-      const d3 = doc.addPart("diode", -120, 80);
-      const d4 = doc.addPart("diode", 40, 80);
-      const load = doc.addPart("resistor", 200, 0, { value: "1k" });
+      // The source sits between the bridge's two legs, so nothing has to cross them.
+      const gen = doc.addPart("vsin", 0, 0, { amp: "12", freq: "60" });
+      gen.rotation = 270;
+      const d1 = doc.addPart("diode", -120, -70);
+      d1.rotation = 270;
+      const d2 = doc.addPart("diode", 120, -70);
+      d2.rotation = 270;
+      const d3 = doc.addPart("diode", -120, 70);
+      d3.rotation = 270;
+      const d4 = doc.addPart("diode", 120, 70);
+      d4.rotation = 270;
+      const load = doc.addPart("resistor", 220, 0, { value: "1k" });
       load.rotation = 90;
-      const c = doc.addPart("capacitor", 300, 0, { value: "100u" });
+      const c = doc.addPart("capacitor", 320, 0, { value: "100u" });
       c.rotation = 90;
-      const gnd = doc.addPart("ground", 200, 180);
-      const scope = doc.addPart("oscilloscope", 380, -120);
-      // Bridge: AC nodes at D1/D3 and D2/D4 midpoints, DC+ at the top, DC- at the bottom.
+      doc.addPart("ground", 220, 150);
+      doc.addPart("oscilloscope", 410, -130);
+      // AC comes in at the middle of each leg, DC+ leaves along the top and DC- along the bottom.
+      doc.connectPins(d1, "A", d3, "K");
+      doc.connectPins(d2, "A", d4, "K");
+      doc.addWire([{ x: -30, y: 0 }, { x: -120, y: 0 }]);
+      doc.addWire([{ x: 30, y: 0 }, { x: 120, y: 0 }]);
       doc.connectPins(d1, "K", d2, "K");
       doc.connectPins(d3, "A", d4, "A");
-      doc.connectPins(gen, "p", d1, "A");
-      doc.connectPins(d1, "A", d3, "K");
-      doc.connectPins(gen, "n", d2, "A");
-      doc.connectPins(d2, "A", d4, "K");
       doc.connectPins(d2, "K", load, "1");
-      doc.connectPins(d4, "A", gnd, "g");
-      doc.connectPins(load, "2", gnd, "g");
-      doc.connectPins(load, "1", c, "1");
-      doc.connectPins(c, "2", gnd, "g");
-      doc.connectPins(load, "1", scope, "A");
-      doc.connectPins(scope, "G", gnd, "g");
+      doc.connectPins(d4, "A", load, "2");
+      doc.addWire([{ x: 220, y: 100 }, { x: 220, y: 140 }]);
+      doc.addWire([{ x: 220, y: -100 }, { x: 320, y: -100 }, { x: 320, y: -30 }]);
+      doc.addWire([{ x: 220, y: 100 }, { x: 320, y: 100 }, { x: 320, y: 30 }]);
+      doc.addWire([{ x: 320, y: -100 }, { x: 395, y: -100 }]);
+      doc.addWire([{ x: 320, y: 100 }, { x: 480, y: 100 }, { x: 480, y: -130 }, { x: 445, y: -130 }]);
     },
   },
   {
@@ -136,6 +143,89 @@ export const EXAMPLES: Example[] = [
     },
   },
 ];
+
+EXAMPLES.push({
+  name: "Holding tank process",
+  build(doc) {
+    const fill = doc.addPart("vdc", -220, -60, { value: "2" });
+    const drain = doc.addPart("vdc", -220, 90, { value: "0.5" });
+    const tank = doc.addPart("holding-tank", 0, 0, { capacity: "10", rate: "1" });
+    const scope = doc.addPart("tektronix-scope", 220, -130, { timePerDiv: "1" });
+    const gnd = doc.addPart("ground", -220, 190);
+    doc.connectPins(fill, "p", tank, "FILL"); doc.connectPins(drain, "p", tank, "DRAIN");
+    doc.connectPins(fill, "n", gnd, "g"); doc.connectPins(drain, "n", gnd, "g");
+    doc.connectPins(tank, "LEVEL", scope, "A"); doc.connectPins(tank, "FULL", scope, "B"); doc.connectPins(scope, "G", gnd, "g");
+    doc.schematic.texts.push({ id: "tank-explanation", x: -100, y: 180, text: "LEVEL: 1 V = 1 L. Net filling rate: 1.5 L/s. FULL: 5 V at 99%." });
+  },
+}, {
+  name: "Conveyor process",
+  build(doc) {
+    const speed = doc.addPart("vdc", -240, -60, { value: "2" });
+    const enable = doc.addPart("vdc", -240, 90, { value: "5" });
+    const belt = doc.addPart("conveyor", 0, 0, { length: "10", gain: "1", sensor: "5" });
+    const scope = doc.addPart("tektronix-scope", 230, -130, { timePerDiv: "1" });
+    const gnd = doc.addPart("ground", -240, 190);
+    doc.connectPins(speed, "p", belt, "SPEED"); doc.connectPins(enable, "p", belt, "ENABLE");
+    doc.connectPins(speed, "n", gnd, "g"); doc.connectPins(enable, "n", gnd, "g");
+    doc.connectPins(belt, "POSITION", scope, "A"); doc.connectPins(belt, "SENSOR", scope, "B"); doc.connectPins(scope, "G", gnd, "g");
+    doc.schematic.texts.push({ id: "belt-explanation", x: -100, y: 180, text: "POSITION: 1 V = 1 m. Belt repeats every 5 s. Set ENABLE below 2.5 V to stop." });
+  },
+}, {
+  name: "8051 serial hello",
+  build(doc) {
+    // Hand-assembled: timer 1 mode 2 (TH1=FDh) gives 9600 baud at 11.0592 MHz; sends a zero-terminated string forever.
+    const mcu = doc.addPart("mcu8051", -60, 0, { frequency: "11.0592Meg", code: "758920758dfd758bfd759850d28e90001fe49360f9f5993099fdc299a380f248656c6c6f2066726f6d20383035310d0a00" });
+    const load = doc.addPart("resistor", 120, 120, { value: "100k" });
+    load.rotation = 90;
+    const gnd = doc.addPart("ground", 120, 220);
+    const terminal = doc.addPart("serial-terminal", 200, -60, { baud: "9600" });
+    doc.connectPins(mcu, "P3.1", load, "1");
+    doc.connectPins(load, "2", gnd, "g");
+    doc.connectPins(mcu, "RST", gnd, "g");
+    doc.connectPins(mcu, "P3.1", terminal, "RX");
+    doc.schematic.texts.push({ id: "uart-explanation", x: -100, y: 260, text: "P3.1 (TXD) sends 8N1 at 9600 baud. The serial terminal decodes it." });
+  },
+}, {
+  name: "8051 serial echo",
+  build(doc) {
+    const program = assemble51(ECHO_SOURCE).code;
+    const mcu = doc.addPart("mcu8051", -60, 0, { frequency: "11.0592Meg", code: Array.from(program, (b) => b.toString(16).padStart(2, "0")).join(""), asm: ECHO_SOURCE });
+    const load = doc.addPart("resistor", 120, 120, { value: "100k" });
+    load.rotation = 90;
+    const gnd = doc.addPart("ground", 120, 220);
+    const terminal = doc.addPart("serial-terminal", 200, -60, { baud: "9600" });
+    doc.connectPins(mcu, "P3.1", load, "1");
+    doc.connectPins(load, "2", gnd, "g");
+    doc.connectPins(mcu, "RST", gnd, "g");
+    doc.connectPins(mcu, "P3.1", terminal, "RX");
+    doc.connectPins(mcu, "P3.0", terminal, "TX");
+    doc.schematic.texts.push({ id: "echo-explanation", x: -100, y: 260, text: "Run it, then type into the serial terminal. The 8051 sends each letter back in upper case." });
+  },
+});
+
+/** Echoes each received character, upper-casing letters. Shown in Design > Microcontroller program. */
+const ECHO_SOURCE = `; 9600 baud 8N1 at 11.0592 MHz: timer 1 in mode 2 reloads from 0FDH.
+        ORG 0
+        MOV TMOD,#20H
+        MOV TH1,#0FDH
+        MOV TL1,#0FDH
+        MOV SCON,#50H      ; mode 1, receiver enabled
+        SETB TR1
+WAIT:   JNB RI,WAIT        ; wait for a character
+        CLR RI
+        MOV A,SBUF
+        CJNE A,#'a',$+3    ; C is set when A < 'a'
+        JC SEND
+        CJNE A,#'z'+1,$+3  ; C is set when A <= 'z'
+        JNC SEND
+        CLR C
+        SUBB A,#20H        ; lower case to upper case
+SEND:   MOV SBUF,A
+        JNB TI,$
+        CLR TI
+        SJMP WAIT
+        END
+`;
 
 export function buildExample(example: Example): Schematic {
   const doc = new Doc();
