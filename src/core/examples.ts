@@ -143,6 +143,49 @@ export const EXAMPLES: Example[] = [
   },
 ];
 
+EXAMPLES.push({
+  name: "Holding tank process",
+  build(doc) {
+    const fill = doc.addPart("vdc", -220, -60, { value: "2" });
+    const drain = doc.addPart("vdc", -220, 90, { value: "0.5" });
+    const tank = doc.addPart("holding-tank", 0, 0, { capacity: "10", rate: "1" });
+    const scope = doc.addPart("tektronix-scope", 220, -130, { timePerDiv: "1" });
+    const gnd = doc.addPart("ground", -220, 190);
+    doc.connectPins(fill, "p", tank, "FILL"); doc.connectPins(drain, "p", tank, "DRAIN");
+    doc.connectPins(fill, "n", gnd, "g"); doc.connectPins(drain, "n", gnd, "g");
+    doc.connectPins(tank, "LEVEL", scope, "A"); doc.connectPins(tank, "FULL", scope, "B"); doc.connectPins(scope, "G", gnd, "g");
+    doc.schematic.texts.push({ id: "tank-explanation", x: -100, y: 180, text: "LEVEL: 1 V = 1 L. Net filling rate: 1.5 L/s. FULL: 5 V at 99%." });
+  },
+}, {
+  name: "Conveyor process",
+  build(doc) {
+    const speed = doc.addPart("vdc", -240, -60, { value: "2" });
+    const enable = doc.addPart("vdc", -240, 90, { value: "5" });
+    const belt = doc.addPart("conveyor", 0, 0, { length: "10", gain: "1", sensor: "5" });
+    const scope = doc.addPart("tektronix-scope", 230, -130, { timePerDiv: "1" });
+    const gnd = doc.addPart("ground", -240, 190);
+    doc.connectPins(speed, "p", belt, "SPEED"); doc.connectPins(enable, "p", belt, "ENABLE");
+    doc.connectPins(speed, "n", gnd, "g"); doc.connectPins(enable, "n", gnd, "g");
+    doc.connectPins(belt, "POSITION", scope, "A"); doc.connectPins(belt, "SENSOR", scope, "B"); doc.connectPins(scope, "G", gnd, "g");
+    doc.schematic.texts.push({ id: "belt-explanation", x: -100, y: 180, text: "POSITION: 1 V = 1 m. Belt repeats every 5 s. Set ENABLE below 2.5 V to stop." });
+  },
+}, {
+  name: "8051 serial hello",
+  build(doc) {
+    // Hand-assembled: timer 1 mode 2 (TH1=FDh) gives 9600 baud at 11.0592 MHz; sends a zero-terminated string forever.
+    const mcu = doc.addPart("mcu8051", -60, 0, { frequency: "11.0592Meg", code: "758920758dfd758bfd759850d28e90001fe49360f9f5993099fdc299a380f248656c6c6f2066726f6d20383035310d0a00" });
+    const load = doc.addPart("resistor", 120, 120, { value: "100k" });
+    load.rotation = 90;
+    const gnd = doc.addPart("ground", 120, 220);
+    const terminal = doc.addPart("serial-terminal", 200, -60, { baud: "9600" });
+    doc.connectPins(mcu, "P3.1", load, "1");
+    doc.connectPins(load, "2", gnd, "g");
+    doc.connectPins(mcu, "RST", gnd, "g");
+    doc.connectPins(mcu, "P3.1", terminal, "RX");
+    doc.schematic.texts.push({ id: "uart-explanation", x: -100, y: 260, text: "P3.1 (TXD) sends 8N1 at 9600 baud. The serial terminal decodes it." });
+  },
+});
+
 export function buildExample(example: Example): Schematic {
   const doc = new Doc();
   doc.schematic.name = example.name;

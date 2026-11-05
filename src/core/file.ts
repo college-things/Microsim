@@ -1,6 +1,7 @@
 // The .microsim file format, which .ohmlet files from before the rename also use. Everything is checked before the open document is touched.
 import type { Graphic, ImportIssue, Schematic, Wire } from "./schematic";
 import type { AnalysisRequest } from "./sim";
+import { validateWorkspace } from "./engineering";
 
 export interface CircuitFile {
   schematic: Schematic;
@@ -9,7 +10,7 @@ export interface CircuitFile {
 }
 
 export function serializeCircuit(file: CircuitFile): string {
-  return JSON.stringify({ format: "microsim", version: 1, ...file });
+  return JSON.stringify({ format: "microsim", version: 1, schematic: file.schematic, analyses: file.analyses, issues: file.issues });
 }
 
 class Bad extends Error {}
@@ -53,6 +54,8 @@ function graphic(g: unknown): void {
 function checkSchematic(s: unknown): Schematic {
   if (!isObj(s)) fail("no circuit");
   const doc = s as Record<string, unknown>;
+  if (doc.nativeMs14 !== undefined && (!isObj(doc.nativeMs14) || !isStr(doc.nativeMs14.xml) || !isStr(doc.nativeMs14.baseline))) fail("native ms14 data");
+  if (doc.workspace !== undefined) validateWorkspace(doc.workspace);
   if (!isStr(doc.name) || !isStr(doc.definitions)) fail("name");
   for (const list of ["components", "wires", "labels", "texts"]) if (!Array.isArray(doc[list])) fail(list);
   for (const c of doc.components as unknown[]) {

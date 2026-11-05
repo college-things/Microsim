@@ -159,16 +159,22 @@ export function parseValue(text: string | undefined): number {
 
 /** Whether a circuit does anything over time: a source that varies, or a logic device or switch. */
 export function changesOverTime(netlist: string): boolean {
-  return /\b(sin|pulse|pwl|exp|sffm|am)\s*\(/i.test(netlist) || /^a\S*\s/im.test(netlist) || /^\.model\s+\S+\s+(d_|sw\b)/im.test(netlist);
+  return /\b(sin|pulse|pwl|exp|sffm|am)\s*\(/i.test(netlist) || /\btime\b/i.test(netlist.replace(/^\s*\*.*$/gm, "")) || /^a\S*\s/im.test(netlist) || /^\.model\s+\S+\s+(d_|sw\b)/im.test(netlist);
 }
 
 const unsafe = (text: string) => text.replace(/[\r\n\u0000-\u001f\u2028\u2029]+/g, " ");
 
-function expand(template: string, comp: SchComponent, ref: string, nets: Map<string, string>, params: Record<string, string>): string {
+function expand(template: string, comp: SchComponent, ref: string, nets: Map<string, string>, params: Record<string, string>, unconnected: (ref: string, pin: string) => string): string {
   return template
     .replace(/\{ref\}/g, ref)
-    .replace(/\{pin:([^}]+)\}/g, (_, pin: string) => nets.get(pin) ?? `nc_${ref}_${pin}`.replace(/[^\w]/g, "_"))
+    .replace(/\{pin:([^}]+)\}/g, (_, pin: string) => nets.get(pin) ?? unconnected(ref, pin))
     .replace(/\{param:([^}]+)\}/g, (_, name: string) => unsafe(params[name] ?? comp.params[name] ?? "0"));
+}
+
+/** A part that repeats needs a period. Zero would otherwise show as typed and run as something else. */
+export function frequencyProblem(comp: SchComponent, text = comp.params.freq): string | undefined {
+  if (comp.instrument !== "function-generator" && comp.instrument !== "clock") return undefined;
+  return text === undefined || (readValue(text) ?? 0) > 0 ? undefined : "Frequency must be a number greater than zero.";
 }
 
 /** SPICE for parts whose circuit form depends on their settings. */
@@ -221,6 +227,9 @@ const POSITIVE = new Set(["resistor", "capacitor", "inductor", "potentiometer"])
 /** Checks a library part's numeric settings and returns them as plain numbers for SPICE. */
 function checkedParams(comp: SchComponent, errors: string[]): Record<string, string> {
   const part = PART_BY_KIND.get(comp.kind);
+  const frequency = frequencyProblem(comp);
+  // A library part's unreadable value gets its own message below.
+  if (frequency && (!part || readValue(comp.params.freq) !== undefined)) errors.push(`${comp.refDes || part?.name}: ${frequency}`);
   if (!part) return comp.params;
   const out: Record<string, string> = { ...comp.params };
   for (const def of part.params) {
@@ -234,9 +243,14 @@ function checkedParams(comp: SchComponent, errors: string[]): Record<string, str
     if (def.key === "value" && POSITIVE.has(comp.kind) && value <= 0) {
       errors.push(`${comp.refDes || part.name}: ${def.label.toLowerCase()} must be greater than zero.`);
     }
+    if (["holding-tank", "conveyor"].includes(comp.kind) && (["capacity", "length"].includes(def.key) ? value <= 0 : value < 0)) errors.push(`${comp.refDes}: ${def.label} must be ${["capacity", "length"].includes(def.key) ? "positive" : "nonnegative"}.`);
     out[def.key] = String(value);
   }
   return out;
+}
+
+export function componentTemplate(comp: SchComponent): string {
+  return comp.instrument || comp.kind === "switch" || comp.kind === "potentiometer" ? instrumentSpice(comp) : comp.spice;
 }
 
 /** Names a part for SPICE so that a display name can never change what the part is. */
@@ -377,6 +391,21 @@ export function buildNetlist(doc: Schematic): NetlistResult {
     map.set(pin.name, net);
   }
 
+  // Every unconnected pin is a node of its own, whatever its name comes to once it's safe for SPICE.
+  const unconnectedNets = new Map<string, string>();
+  const unconnected = (ref: string, pin: string) => {
+    const key = `${ref}/${pin}`;
+    let net = unconnectedNets.get(key);
+    if (!net) {
+      const base = `nc_${ref}_${pin}`.replace(/[^\w]/g, "_");
+      net = base;
+      for (let n = 2; taken.has(net.toLowerCase()); n++) net = `${base}_${n}`;
+      taken.add(net.toLowerCase());
+      unconnectedNets.set(key, net);
+    }
+    return net;
+  };
+
   const refs = spiceRefs(doc, warnings);
   const lines = [`* ${unsafe(doc.name)}`];
   const definitions = new Set<string>();
@@ -384,9 +413,8 @@ export function buildNetlist(doc: Schematic): NetlistResult {
   let hasGround = false;
   for (const comp of doc.components) {
     const part = PART_BY_KIND.get(comp.kind);
-    const dynamic = comp.instrument || comp.kind === "switch" || comp.kind === "potentiometer";
     const params = checkedParams(comp, errors);
-    const template = dynamic ? instrumentSpice({ ...comp, params }) : comp.spice;
+    const template = componentTemplate({ ...comp, params });
     const nets = pinNets.get(comp.id) ?? new Map<string, string>();
     for (const net of nets.values()) if (net === "0") hasGround = true;
     if (!comp.pins.length && deckUsesGround(template)) hasGround = true;
@@ -394,13 +422,26 @@ export function buildNetlist(doc: Schematic): NetlistResult {
     for (const pin of comp.pins) {
       if (!nets.has(pin.name)) warnings.push(`${comp.refDes || part?.name}: pin ${pin.name} is not connected.`);
     }
-    lines.push(expand(template, comp, refs.get(comp.id)!, nets, params));
+    lines.push(expand(template, comp, refs.get(comp.id)!, nets, params, unconnected));
     if (part?.definitions) definitions.add(part.definitions);
   }
   if (!hasGround && doc.components.length) warnings.push("The circuit has no ground connection.");
   for (const def of definitions) lines.push(def);
   lines.push(".end");
   return { text: lines.join("\n"), pinNets, refs, autoNets, namedNets, warnings, errors };
+}
+
+/** Which net every pin is on, by part id, so a part's name and position make no difference. */
+export function pinNetsKey(pinNets: NetlistResult["pinNets"]): string {
+  return [...pinNets].map(([id, nets]) => `${id} ${[...nets].map(([pin, net]) => `${pin}=${net}`).join(" ")}`).join("\n");
+}
+
+/**
+ * What a run's readings depend on. Instruments read their nets without being in the netlist, so
+ * which node one watches counts as well as the text. Moving a part changes neither.
+ */
+export function runSignature(netlist: NetlistResult): string {
+  return `${netlist.text}\n${pinNetsKey(netlist.pinNets)}`;
 }
 
 /** Independent sources at the top level of a netlist, which analyses can drive. */

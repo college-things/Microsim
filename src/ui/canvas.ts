@@ -817,7 +817,7 @@ export class SchematicCanvas {
         console.error(`Could not draw ${comp.refDes}`, error);
       }
       const display = this.displays.get(comp.id);
-      if (display) this.drawDisplay(ctx, b, display);
+      if (display) this.drawDisplay(ctx, b, display,comp);
       if (this.zoom > 0.25) this.drawLabels(ctx, comp, b, textColor);
       if (selected) {
         ctx.strokeStyle = accent;
@@ -895,7 +895,14 @@ export class SchematicCanvas {
     }
   }
 
-  private drawDisplay(ctx: CanvasRenderingContext2D, b: { x0: number; y0: number; x1: number; y1: number }, display: PartDisplay): void {
+  private drawDisplay(ctx: CanvasRenderingContext2D, b: { x0: number; y0: number; x1: number; y1: number }, display: PartDisplay,comp:SchComponent): void {
+    if(display.machine){
+      ctx.save();ctx.translate(comp.x,comp.y);ctx.rotate(comp.rotation*Math.PI/180);if(comp.mirrored)ctx.scale(-1,1);
+      const fraction=display.machine.fraction;
+      if(display.machine.kind==='tank'){ctx.fillStyle='#69b7e9';ctx.globalAlpha=0.8;ctx.fillRect(-32,32-59*fraction,64,59*fraction);}
+      else{ctx.fillStyle='#c49b6a';ctx.strokeStyle='#755635';ctx.lineWidth=1;ctx.fillRect(-35+60*fraction,-23,10,12);ctx.strokeRect(-35+60*fraction,-23,10,12);}
+      ctx.globalAlpha=1;ctx.fillStyle='#163f6a';ctx.font='bold 11px ui-monospace, monospace';ctx.textAlign='center';ctx.textBaseline='middle';if(display.text)ctx.fillText(display.text,0,display.machine.kind==='tank'?0:22);ctx.restore();return;
+    }
     const cx = (b.x0 + b.x1) / 2;
     const cy = (b.y0 + b.y1) / 2;
     if (display.glow) {

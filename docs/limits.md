@@ -2,33 +2,37 @@
 
 This is the honest list: what won't be built, what can only be approximate, what isn't built yet, and what Claude, which is building this app, can't do or check without a person. It was written on 2026-11-05, while features are still being added, so section 3 will shrink.
 
-## 1. What won't be built
+## Design expansion update
+
+The seven areas requested after this document was written now have initial workflows. See [design-workflows.md](design-workflows.md) for precise supported behavior, setup and verification. The entries below distinguish these implementations from native NI compatibility.
+
+## 1. Remaining boundaries
 
 Each of these depends on another company's product or material, or would work against keeping the app light.
 
-**Blocked by the rules of this project**
+**External data and compatibility**
 
-- **NI's component database.** It can't be copied, so the app won't have NI's parts lists or models. The planned parts library uses numbers fitted from public datasheets instead.
+- **NI's component database.** The local bridge reads supported installed Master/User/Corporate Jet databases and imports chosen model variants; `.ms14` catalogue imports also work. Generic pin-block symbols replace native graphics. Generated instance parameters and database archives remain unsupported. No NI collection is bundled.
 - **NI's samples.** They can't be bundled, so someone on a Mac without NI's software won't have them. The app will ship its own example circuits.
-- **Agilent and Tektronix instrument panels.** They reproduce named companies' front panels. Generic instruments measure the same things.
-- **Inspecting NI's programs.** NI's license bars reverse engineering, so NI's executables, DLLs and database files are never opened. Everything known about `.ms14` comes from circuit files and observed behaviour.
+- **Agilent and Tektronix instrument panels.** Original styled meter/scope variants are available. They are not exact hardware replicas and do not implement hardware communication or SCPI.
+- **Native format investigation.** User-authorized local format investigation and the installed NI Automation API are used to verify compatibility. No NI binary or database is bundled with the app.
 
 **Needs software or hardware the app can't include**
 
-- **LabVIEW co-simulation and LabVIEW instruments.** They need LabVIEW, which can't run in a browser or ship with a Mac app.
+- **LabVIEW co-simulation and instruments.** An independent local numeric dataflow runtime and editable blocks run without NI software, with stateful feedback and mapped DC outputs. It does not read `.vi` binaries or implement the full LabVIEW language. Optional HTTP Web Service coupling and a native Windows VI Server adapter are also implemented. The VI adapter has protocol tests but awaits a real LabVIEW installation for validation. None of these modes negotiates analog solver timesteps with NI's synchronized co-simulation engine.
 - **ELVIS and other lab hardware.**
 - **Excel and Mathcad links.** CSV and SVG export cover this.
 - **NI's result formats** (`.gra`, `.lvm`, `.tdm`). `.gra` has no public description. Results save as CSV, SVG and the app's own file.
 
 **Too large or too risky for a light app**
 
-- **Saving back to `.ms14`.** The format is undocumented, a written file might not open in Multisim, and it adds legal exposure. The app opens these files and saves its own format. SPICE decks can be exported.
-- **PCB layout, and transfer to Ultiboard.** Multisim hands layout to a separate product too. The planned KiCad netlist export is the replacement.
-- **VHDL, PLD and FPGA design flows.** No sample uses them.
+- **Saving `.ms14`.** Imported native circuits preserve original records for parameter edits. New circuits and explicit flattened exports write native symbols and connections; seven starters opened in Multisim 14.2 and the RC filter's native connectivity was verified. Flattening imported circuits does not reproduce unknown scripts, hierarchy or proprietary behavior. Native simulation equivalence is unverified. See the design workflow guide.
+- **PCB layout and transfer.** Two-layer routing with plated vias, adjustable through-hole pads, connectivity/clearance checks, KiCad export, and Gerber/NC-drill ZIP export are available. Gerber, drill and ZIP parsing were independently checked. Zones, autorouting, surface-mount pads, silkscreen export and transfer to Ultiboard are not implemented; fabrication suitability remains unverified.
+- **VHDL and FPGA design.** Real GHDL analysis/simulation and an iCE40 HX1K/TQ144 bitstream build passed installed-tool and browser checks. They require the local build bridge and tools. Other families, device programming and analog/HDL co-simulation are not implemented.
 - **Database Manager, Component Wizard, Symbol Editor and Title Block Editor.** A planned model block will build a part from pasted SPICE text instead.
-- **A C compiler for microcontrollers.** Programs can be written in assembly, or built elsewhere and loaded as `.hex`.
+- **A C compiler for microcontrollers.** Real SDCC compilation and independent built-in 8051 circuit execution are implemented. Compiled or imported Intel HEX can be attached to a core and saved with the circuit. GPIO, timers, interrupts and instruction timing have tests, including uCsim comparisons and real compiled C. Imported NI MCU parts, PICs, UART, physical chip power behavior and external bus waveforms remain unsupported. See the design workflow guide for the exact boundary.
 - **Reading `.mcuws` and `.mcuprj` project files.** They're undocumented and not needed, because a person picks the program file.
-- **Tank and conveyor machine behaviour.** In those 2 samples it lives in scripts rather than in the circuit. They will keep showing a notice.
+- **Tank and conveyor machine behaviour.** Original placeable models simulate transient state and sensor outputs, with animated fill/motion and physical-unit readouts. Imported NI scripts, falling objects and exact sample behavior are still unsupported; those imported parts retain their starting models and notices.
 - **Rated parts that blow, and 3D parts.** No sample has them, and blowing needs the circuit to change during a run.
 - **Other things left out:**
   - assembly variant editing
@@ -96,10 +100,10 @@ These are planned, in this order. Until they land, the app can't do them.
     - Spreadsheet View, comments, shapes and description box
     - hierarchical blocks, pages and subcircuits
     - title block and printing
-13. **Microcontrollers:** 8051 and PIC16 running in the simulator, with assemblers, LCDs, serial terminal, keypad and debugger.
+13. **Microcontrollers:** imported NI MCU conversion, PIC16, assemblers, LCDs, serial terminal, keypad and debugger. The independent built-in 8051 core now executes firmware.
 14. **Assistant coverage, original examples and final docs.**
 
-Today, microcontrollers, LCDs and serial ports open but do nothing, and a notice says so.
+Imported NI microcontrollers, LCDs and serial ports still open with notices and do nothing. This does not apply to the independently implemented built-in 8051 core.
 
 ## 4. What Claude can't do
 

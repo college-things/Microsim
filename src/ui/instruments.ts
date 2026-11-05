@@ -6,6 +6,8 @@ import { readValue } from "../core/netlist";
 import type { SchComponent } from "../core/schematic";
 import type { SimResult } from "../core/sim";
 import { formatSI, Plot, type Series } from "./plot";
+import {coupleScope,scopeTrigger} from '../core/scope';
+import { decodeUart, terminalText } from "../core/uart";
 
 export interface RunData {
   op?: SimResult;
@@ -21,6 +23,11 @@ export interface ScopeSettings {
   /** Zero means fit the trace automatically. */
   voltsPerDivA: number;
   voltsPerDivB: number;
+  voltsPerDivC?:number;
+  voltsPerDivD?:number;
+  triggerSource?:'A'|'B'|'C'|'D';
+  triggerSlope?:'rising'|'falling';
+  coupling?:Partial<Record<'A'|'B'|'C'|'D','DC'|'AC'|'GND'>>;
   /** Trigger on channel A rising through this level. Undefined shows the latest sweep as is. */
   triggerLevel?: number;
 }
@@ -291,6 +298,8 @@ export interface InstrumentView {
   follow(comp: SchComponent): void;
   /** Blanks the readings, because the circuit no longer matches them. */
   clear(): void;
+  /** Every chunk of a live run, in order, for instruments that must not miss samples. */
+  stream?(run: RunData, time: Float64Array, vector: (name: string) => Float64Array | undefined): void;
   element: HTMLElement;
 }
 
@@ -333,6 +342,10 @@ function message(plot: HTMLElement, text: string): HTMLElement {
 
 export function createScope(host: HTMLElement, comp: SchComponent, settings: ScopeSettings, onChange: () => void, onClose: () => void, running: () => boolean): InstrumentView {
   const win = floatingWindow(host, `Oscilloscope ${comp.refDes}`, 520, 340, onClose);
+  if (comp.kind === "tektronix-scope") {
+    win.root.classList.add("tektronix-panel");
+    const name = document.createElement("div"); name.className = "panel-badge"; name.textContent = "Tektronix style · simulated four-channel scope"; win.body.append(name);
+  }
   const note = message(win.body, "Run the simulation to see traces.");
   const plot = new Plot(win.body);
   const row = controls(win.body);
@@ -351,14 +364,32 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
   };
   const voltsA = field("A V/div", showScale(settings.voltsPerDivA, "V"), (text) => {
     settings.voltsPerDivA = scale(text);
+    onChange();
     if (last) draw(last);
   });
   const voltsB = field("B V/div", showScale(settings.voltsPerDivB, "V"), (text) => {
     settings.voltsPerDivB = scale(text);
+    onChange();
     if (last) draw(last);
   });
+  const extraFields:HTMLInputElement[]=[];
+  const channels:('A'|'B'|'C'|'D')[]=comp.kind==='tektronix-scope'?['A','B','C','D']:['A','B'];
+  for(const channel of channels.slice(2)){
+    const key=channel==='C'?'voltsPerDivC':'voltsPerDivD';
+    extraFields.push(field(`${channel} V/div`,showScale(settings[key]??0,'V'),text=>{settings[key]=scale(text);onChange();if(last)draw(last);}));
+  }
+  const advanced=document.createElement('details');advanced.className='scope-options';
+  const summary=document.createElement('summary');summary.textContent='Coupling and trigger';advanced.append(summary);win.body.append(advanced);
+  const advancedRow=controls(advanced);
+  const select=(label:string,choices:string[],value:string,change:(value:string)=>void)=>{
+    const wrap=document.createElement('label');wrap.append(label+' ');const input=document.createElement('select');input.setAttribute('aria-label',label);for(const choice of choices){const option=document.createElement('option');option.value=choice;option.textContent=choice;input.append(option);}input.value=value;input.onchange=()=>{change(input.value);onChange();if(last)draw(last);};wrap.append(input);advancedRow.append(wrap);return input;
+  };
+  for(const channel of channels)select(`${channel} coupling`,['DC','AC','GND'],settings.coupling?.[channel]??'DC',value=>{settings.coupling??={};settings.coupling[channel]=value as 'DC'|'AC'|'GND';});
+  select('Trigger source',channels,settings.triggerSource??'A',value=>{settings.triggerSource=value as 'A'|'B'|'C'|'D';});
+  select('Trigger slope',['rising','falling'],settings.triggerSlope??'rising',value=>{settings.triggerSlope=value as 'rising'|'falling';});
   const trigger = field("Trigger", settings.triggerLevel === undefined ? "off" : formatSI(settings.triggerLevel, "V"), (text) => {
     settings.triggerLevel = readValue(text);
+    onChange();
     if (last) draw(last);
   });
   const stats = document.createElement("span");
@@ -369,6 +400,7 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
     setField(time, showScale(settings.timePerDiv, "s"));
     setField(voltsA, showScale(settings.voltsPerDivA, "V"));
     setField(voltsB, showScale(settings.voltsPerDivB, "V"));
+    extraFields.forEach((field,i)=>setField(field,showScale(i===0?settings.voltsPerDivC??0:settings.voltsPerDivD??0,'V')));
     setField(trigger, settings.triggerLevel === undefined ? "off" : formatSI(settings.triggerLevel, "V"));
     if (!run.tran?.axis) {
       note.textContent = "Connect channel A or B and run the simulation.";
@@ -382,16 +414,11 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
     let from = 0;
     while (from < run.tran.axis.re.length - 1 && run.tran.axis.re[from] < end - span * 3) from++;
     const axis = run.tran.axis.re.subarray(from);
-    const a = differential(run.tran, nets, "A", "G")?.subarray(from);
-    const b = differential(run.tran, nets, "B", "G")?.subarray(from);
+    const waves=channels.map(channel=>{const values=differential(run.tran!,nets,channel,'G');return values?coupleScope(values,run.tran!.axis!.re,settings.coupling?.[channel]??'DC').subarray(from):undefined;});
     // Show ten divisions, starting at the last trigger that leaves a full sweep on screen.
-    let start = Math.max(axis[0], end - span);
-    if (settings.triggerLevel !== undefined && a) {
-      for (let i = 1; i < axis.length && axis[i] + span <= end; i++) {
-        if (a[i - 1] < settings.triggerLevel && a[i] >= settings.triggerLevel) start = axis[i];
-      }
-    }
-    const fixed = settings.voltsPerDivA > 0 || settings.voltsPerDivB > 0;
+    const start=scopeTrigger(axis,waves[channels.indexOf(settings.triggerSource??'A')],settings.triggerLevel,span,settings.triggerSlope);
+    const scales=[settings.voltsPerDivA,settings.voltsPerDivB,settings.voltsPerDivC??0,settings.voltsPerDivD??0];
+    const fixed = scales.slice(0,channels.length).some(n=>n>0);
     const series: Series[] = [];
     const add = (label: string, wave: Float64Array | undefined, perDiv: number, color: string) => {
       if (!wave) return;
@@ -399,9 +426,8 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
       const unit = fixed ? perDiv || peak(wave) / 4 || 1 : 1;
       series.push({ label, x: axis, y: fixed ? wave.map((v) => v / unit) : wave, color, unit: "V", readoutScale: unit });
     };
-    add("A", a, settings.voltsPerDivA, "#d9480f");
-    add("B", b, settings.voltsPerDivB, "#1864ab");
-    note.textContent = series.length ? "" : "Channels A and B are not connected to anything.";
+    channels.forEach((channel,i)=>add(channel,waves[i],scales[i],['#d9480f','#1864ab','#087f5b','#862e9c'][i]));
+    note.textContent = series.length ? "" : "The scope channels are not connected to anything.";
     note.style.display = series.length ? "none" : "";
     // The axis keeps to the time base, even with less than that to show.
     plot.set(series, {
@@ -412,7 +438,7 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
     let first = 0;
     while (first < axis.length - 1 && axis[first] < start) first++;
     const shown = axis.subarray(first);
-    stats.textContent = [a && `A ${formatSI(settledRms(a.subarray(first), shown), "V")} rms`, b && `B ${formatSI(settledRms(b.subarray(first), shown), "V")} rms`, storedNote(end - axis[0], span, running())].filter(Boolean).join("   ");
+    stats.textContent = [...waves.map((wave,i)=>wave&&`${channels[i]} ${formatSI(settledRms(wave.subarray(first),shown),'V')} rms`),storedNote(end-axis[0],span,running())].filter(Boolean).join('   ');
   }
 
   return {
@@ -441,8 +467,21 @@ function peak(values: ArrayLike<number>): number {
   return high;
 }
 
-export function createMultimeter(host: HTMLElement, comp: SchComponent, onClose: () => void): InstrumentView {
-  const win = floatingWindow(host, `Multimeter ${comp.refDes}`, 300, 180, onClose);
+export function createMultimeter(host: HTMLElement, comp: SchComponent, onClose: () => void, onConfigure?: (part: SchComponent, values: Record<string, string>) => void): InstrumentView {
+  const branded = comp.kind === "agilent-multimeter";
+  const win = floatingWindow(host, `Multimeter ${comp.refDes}`, branded ? 360 : 300, branded ? 260 : 180, onClose);
+  if (comp.kind === "agilent-multimeter") {
+    win.root.classList.add("agilent-panel");
+    const name = document.createElement("div"); name.className = "panel-badge"; name.textContent = "Agilent style · simulated multimeter"; win.body.append(name);
+    const row = document.createElement("div"); row.className = "design-controls";
+    for (const [label, mode, coupling] of [["DC V", "volts", "dc"], ["AC V", "volts", "ac"], ["DC A", "amps", "dc"], ["AC A", "amps", "ac"], ["Ω", "ohms", "dc"]]) {
+      const control = document.createElement("button"); control.textContent = label;
+      control.disabled = !onConfigure;
+      control.onclick = () => onConfigure?.(comp, { mode, coupling });
+      row.append(control);
+    }
+    win.body.append(row);
+  }
   const display = document.createElement("div");
   display.className = "readout";
   display.textContent = "--";
@@ -679,6 +718,81 @@ export function createBode(host: HTMLElement, comp: SchComponent, onClose: () =>
       phase.set([]);
       note.style.display = "";
       note.textContent = "The circuit changed. Run it to plot.";
+    },
+  };
+}
+
+/**
+ * Receive-only serial terminal. It decodes UART frames on RX (referred to ground) from the transient data.
+ * Live runs deliver a rolling window, so decoding resumes after the last frame already shown.
+ */
+export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onClose: () => void): InstrumentView {
+  const win = floatingWindow(host, `Serial terminal ${comp.refDes}`, 360, 240, onClose);
+  const screen = document.createElement("pre");
+  screen.className = "serial-terminal";
+  const detail = document.createElement("div");
+  detail.className = "muted pad";
+  const clearButton = document.createElement("button");
+  clearButton.textContent = "Clear";
+  win.body.append(screen, detail, clearButton);
+  let text = "", resume = -Infinity, errors = 0, streamed = false;
+  // Samples not yet decoded, carried between live chunks so a frame split across two chunks is read whole.
+  let tailTime: number[] = [], tailVolts: number[] = [];
+  const reset = () => { text = ""; resume = -Infinity; errors = 0; streamed = false; tailTime = []; tailVolts = []; screen.textContent = ""; };
+  clearButton.onclick = () => { text = ""; errors = 0; screen.textContent = ""; };
+  const settings = () => ({ baud: readValue(comp.params.baud ?? "9600") ?? 0, threshold: readValue(comp.params.threshold ?? "2.5") ?? 2.5, parity: (comp.params.parity as "none" | "even" | "odd") ?? "none" });
+  const describe = () => `${settings().baud || "?"} baud, 8 data bits, ${comp.params.parity ?? "none"} parity, 1 stop bit, idle high.`;
+  detail.textContent = describe();
+  const show = (decoded: ReturnType<typeof decodeUart>) => {
+    resume = decoded.resume;
+    if (decoded.gap && text) text += "\n[samples missed: decoding resynchronized]\n";
+    errors += decoded.bytes.filter((b) => b.error).length;
+    text += terminalText(decoded.bytes);
+    if (text.length > 20000) text = text.slice(-20000);
+    if (screen.textContent !== text) { screen.textContent = text; screen.scrollTop = screen.scrollHeight; }
+    detail.textContent = describe() + (errors ? ` ${errors} frame error${errors === 1 ? "" : "s"} (shown as �).` : "");
+  };
+  const rxNet = (run: RunData) => run.pinNets.get(comp.id)?.get("RX");
+  return {
+    element: win.root,
+    follow(part) {
+      comp = part;
+      win.setTitle(`Serial terminal ${comp.refDes}`);
+    },
+    stream(run, time, vector) {
+      const net = rxNet(run), s = settings();
+      const volts = net && net !== "0" ? vector(`v(${net})`) : undefined;
+      if (!volts || !(s.baud > 0) || !time.length) return;
+      // A new run starts its time again.
+      if (tailTime.length && time[0] < tailTime[0]) reset();
+      streamed = true;
+      // Consecutive chunks can share their boundary sample.
+      let first = 0;
+      const last = tailTime.length ? tailTime[tailTime.length - 1] : -Infinity;
+      while (first < time.length && time[first] <= last) first++;
+      const allTime = tailTime.concat(Array.from(time.subarray(first))), allVolts = tailVolts.concat(Array.from(volts.subarray(first)));
+      show(decodeUart(allTime, allVolts, s, resume));
+      // Keep one sample before the resume point, for edge detection, and everything after it.
+      let from = 0;
+      while (from + 1 < allTime.length && allTime[from + 1] <= resume) from++;
+      tailTime = allTime.slice(from);
+      tailVolts = allVolts.slice(from);
+    },
+    update(run) {
+      if (streamed) return;
+      const net = rxNet(run), s = settings();
+      const time = run.tran?.axis?.re;
+      const volts = net && net !== "0" && run.tran ? findVector(run.tran, `v(${net})`)?.re : undefined;
+      if (!time || !volts || !(s.baud > 0)) {
+        detail.textContent = !(s.baud > 0) ? "Set a positive baud rate." : net ? "Needs a transient run to decode." : "Connect RX to a signal.";
+        return;
+      }
+      reset();
+      show(decodeUart(time, volts, s));
+    },
+    clear() {
+      reset();
+      detail.textContent = "The circuit changed. Run it to receive.";
     },
   };
 }

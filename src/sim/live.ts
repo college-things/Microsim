@@ -104,6 +104,10 @@ export class LiveRun {
     if (!this.stopped) this.worker.postMessage({ type: "rate", rate } satisfies LiveCommand);
   }
 
+  setStopAt(stopAt: number | undefined): void {
+    if (!this.stopped) this.worker.postMessage({ type: "stopAt", stopAt } satisfies LiveCommand);
+  }
+
   /** Applies changed values without losing state. Resolves false if it needs a restart instead. */
   update(netlist: string): Promise<boolean> {
     if (this.stopped) return Promise.resolve(false);

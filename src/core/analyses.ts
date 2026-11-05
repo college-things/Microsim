@@ -134,6 +134,25 @@ export function findVector(result: SimResult, name: string): SimVector | undefin
   return result.vectors.find((v) => v.name.toLowerCase() === wanted);
 }
 
+/** Below this share of the strongest signal of its kind, an AC value is the solver's rounding, not a signal. */
+const AC_RESIDUE = 1e-13;
+
+/** Each vector of an AC result in dB, with NaN where it holds no signal, which no plot should draw down to. */
+export function acDecibels(result: SimResult): Map<string, Float64Array> {
+  const magnitudes = result.vectors.map((v) => Float64Array.from(v.re, (re, i) => Math.hypot(re, v.im?.[i] ?? 0)));
+  const strongest = new Map<string, number>();
+  result.vectors.forEach((v, n) => strongest.set(v.unit, magnitudes[n].reduce((peak, m) => Math.max(peak, m), strongest.get(v.unit) ?? 0)));
+  return new Map(result.vectors.map((v, n) => {
+    const floor = strongest.get(v.unit)! * AC_RESIDUE;
+    return [v.name, magnitudes[n].map((m) => (m > floor ? 20 * Math.log10(m) : NaN))];
+  }));
+}
+
+/** The vectors of an AC result that hold a signal anywhere in the sweep. */
+export function acSignals(result: SimResult): Set<string> {
+  return new Set([...acDecibels(result)].filter(([, db]) => db.some((value) => !Number.isNaN(value))).map(([name]) => name));
+}
+
 export function rms(values: ArrayLike<number>, time: ArrayLike<number>): number {
   let sum = 0;
   for (let i = 1; i < values.length; i++) {

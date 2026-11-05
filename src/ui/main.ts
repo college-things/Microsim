@@ -1,16 +1,16 @@
 // Application shell: menus, palette, properties, spreadsheet, dialogs and the simulate flow.
 import { Assistant, explainError, Stopped } from "../agent/assistant";
-import { findVector, fourier, monteCarlo, parameterSweep, temperatureSweep, type SweepRun } from "../core/analyses";
+import { acDecibels, acSignals, findVector, fourier, monteCarlo, parameterSweep, temperatureSweep, type SweepRun } from "../core/analyses";
 import { Doc, newId } from "../core/doc";
 import { PART_BY_KIND, PARTS } from "../core/library";
-import { buildNetlist, changesOverTime, listSources, parseValue, pinWorld, readValue, resolveSource } from "../core/netlist";
+import { buildNetlist, changesOverTime, frequencyProblem, listSources, parseValue, pinNetsKey, pinWorld, readValue, resolveSource, runSignature } from "../core/netlist";
 import type { ImportIssue, SchComponent, Schematic } from "../core/schematic";
 import type { AnalysisRequest, SimResult } from "../core/sim";
 import { runSimulation, stopSimulation } from "../sim/client";
 import { LiveBuffer, LiveRun } from "../sim/live";
 import { holdWorkerScript } from "../sim/spawn";
 import { SchematicCanvas } from "./canvas";
-import { clearArea, createBode, createLogicAnalyzer, createMultimeter, createScope, createWattmeter, floatingWindow, type InstrumentView, type RunData, type ScopeSettings, showWindow, tileWindows } from "./instruments";
+import { clearArea, createBode, createLogicAnalyzer, createSerialTerminal, createMultimeter, createScope, createWattmeter, floatingWindow, type InstrumentView, type RunData, type ScopeSettings, showWindow, tileWindows } from "./instruments";
 import { buildExample, EXAMPLES, type Example } from "../core/examples";
 import { resultToCsv, runsToCsv, schematicToSvg } from "../core/export";
 import { indicatorParts, indicatorVectors, readIndicator } from "../core/indicators";
@@ -21,6 +21,8 @@ import { parseCircuit, serializeCircuit, type CircuitFile } from "../core/file";
 import { applyInteractive, validateImportedParam } from "../importer/interactive";
 import { renderMarkdown } from "./markdown";
 import { formatSI, Plot, redrawPlots, seriesStyle, type Series } from "./plot";
+import { DesignUI } from "./design";
+import { serializeMs14 } from "../importer/writer";
 
 const FILE_EXTENSION = "microsim";
 /** What saved circuits were called before the app was renamed. They still open. */
@@ -167,7 +169,7 @@ let lastOpRows: [string, number, string][] = [];
 const sheetTabs = tabs(spreadsheet, ["Results", "Components", "Netlist", "Issues"], (name, body) => {
   if (name === "Results") {
     if (lastOpRows.length) {
-      body.append(el("p", { className: "muted pad", textContent: "DC operating point, with AC sources at their DC value. During a run, instruments and wires show live values." }));
+      body.append(el("p", { className: "muted pad", textContent: "DC operating point, with AC sources at their DC value. During a run, instruments and the wires being watched show live values. Other wires keep these values." }));
       const table = el("table");
       table.innerHTML = "<thead><tr><th>Signal</th><th>DC value</th></tr></thead>";
       const rows = el("tbody");
@@ -286,7 +288,7 @@ doc.subscribe(() => {
     }
   }
   // Moving a part or changing nothing electrical keeps results valid.
-  const signature = buildNetlist(doc.schematic).text;
+  const signature = runSignature(buildNetlist(doc.schematic));
   if (signature !== lastSignature) {
     lastSignature = signature;
     markWindowsStale();
@@ -466,7 +468,7 @@ function renderProperties(): void {
         report(control, `"${control.value}" isn't a value. Try 10k, 4.7u or 1M. Capital M means mega, small m means milli.`);
         return;
       }
-      const invalid = part ? undefined : validateImportedParam(comp, def.key, control.value);
+      const invalid = (def.key === "freq" ? frequencyProblem(comp, control.value) : undefined) ?? (part ? undefined : validateImportedParam(comp, def.key, control.value));
       if (invalid) {
         report(control, invalid);
         return;
@@ -538,6 +540,11 @@ function applySettingsToRun(): void {
       return;
     }
     const current = live;
+    // Instruments read the nets the run started with, and a live update can't change those.
+    if (current && lastRun && pinNetsKey(lastRun.pinNets) !== pinNetsKey(netlist.pinNets)) {
+      onNewStructure();
+      return;
+    }
     if (current) {
       updatesInFlight++;
       const applied = await current.update(netlist.text);
@@ -562,6 +569,7 @@ async function refreshSnapshots(netlist: string): Promise<void> {
     const op = await runSimulation(netlist, { type: "op" });
     if (token !== runToken) return;
     run.op = op;
+    logWarnings(op.warnings);
     lastOpRows = op.vectors.map((v) => [v.name, v.re[0], v.unit]);
     // Wires the live data doesn't carry show this operating point instead.
     showProbes(op, doc.schematic, run.pinNets);
@@ -574,6 +582,7 @@ async function refreshSnapshots(netlist: string): Promise<void> {
       });
       if (token !== runToken) return;
       run.ac = ac;
+      logWarnings(ac.warnings);
     }
     for (const view of views.values()) view.update(run);
     if (sheetTabs.current() === "Results") sheetTabs.refresh();
@@ -684,7 +693,7 @@ const scopeSettings = new Map<string, ScopeSettings>();
 const closedWindows = new Set<string>();
 /** Windows whose part was deleted, which come back if an undo brings the part back. */
 const closedByDelete = new Set<string>();
-/** Scopes whose time scale was set by hand, which isn't an edit that undo takes back. */
+/** Scopes whose scales or trigger were set by hand, which isn't an edit that undo takes back. */
 const scaledScopes = new Set<string>();
 let lastRun: RunData | undefined;
 
@@ -692,7 +701,13 @@ function keepScopeScales(): void {
   for (const id of scaledScopes) {
     const part = doc.schematic.components.find((c) => c.id === id);
     const settings = scopeSettings.get(id);
-    if (part && settings) part.params.timePerDiv = String(settings.timePerDiv);
+    if (!part || !settings) continue;
+    part.params.timePerDiv = String(settings.timePerDiv);
+    // Left out, these come back as fit to the trace and no trigger. Zero is a real trigger level.
+    for (const [key, value] of [["voltsPerDivA", settings.voltsPerDivA || undefined], ["voltsPerDivB", settings.voltsPerDivB || undefined],["voltsPerDivC",settings.voltsPerDivC||undefined],["voltsPerDivD",settings.voltsPerDivD||undefined],["triggerSource",settings.triggerSource],["triggerSlope",settings.triggerSlope],...(['A','B','C','D'] as const).map(channel=>[`coupling${channel}`,settings.coupling?.[channel]] as const), ["triggerLevel", settings.triggerLevel]] as const) {
+      if (value === undefined) delete part.params[key];
+      else part.params[key] = String(value);
+    }
   }
 }
 
@@ -703,6 +718,10 @@ function scopeDefaults(comp: SchComponent, netlist: string): ScopeSettings {
     timePerDiv: stored("timePerDiv") || autoTimePerDiv(netlist) * (comp.instrument === "logic-analyzer" ? 3 : 1),
     voltsPerDivA: stored("voltsPerDivA"),
     voltsPerDivB: stored("voltsPerDivB"),
+    voltsPerDivC:stored('voltsPerDivC'),voltsPerDivD:stored('voltsPerDivD'),
+    triggerSource:(['A','B','C','D'].includes(comp.params.triggerSource)?comp.params.triggerSource:'A') as ScopeSettings['triggerSource'],
+    triggerSlope:comp.params.triggerSlope==='falling'?'falling':'rising',
+    coupling:Object.fromEntries((['A','B','C','D'] as const).map(channel=>[channel,['DC','AC','GND'].includes(comp.params[`coupling${channel}`])?comp.params[`coupling${channel}`]:'DC'])) as ScopeSettings['coupling'],
     triggerLevel: readValue(comp.params.triggerLevel),
   };
 }
@@ -737,13 +756,15 @@ function openInstrument(comp: SchComponent): void {
   if (comp.instrument === "oscilloscope") {
     view = createScope(sheetHost, comp, settingsFor(), rescaled, onClose, running);
   } else if (comp.instrument === "multimeter") {
-    view = createMultimeter(sheetHost, comp, onClose);
+    view = createMultimeter(sheetHost, comp, onClose, (part, values) => changeSetting(() => Object.assign(part.params, values)));
   } else if (comp.instrument === "bode-plotter") {
     view = createBode(sheetHost, comp, onClose);
   } else if (comp.instrument === "wattmeter") {
     view = createWattmeter(sheetHost, comp, onClose);
   } else if (comp.instrument === "logic-analyzer") {
     view = createLogicAnalyzer(sheetHost, comp, settingsFor(), rescaled, onClose, running);
+  } else if (comp.instrument === "serial-terminal") {
+    view = createSerialTerminal(sheetHost, comp, onClose);
   }
   if (view) {
     views.set(comp.id, view);
@@ -805,6 +826,11 @@ function commitTypedValue(): void {
   (document.activeElement as HTMLElement | null)?.closest?.(".side")?.querySelector<HTMLElement>(":focus")?.blur();
 }
 
+function stopAtProblem(): string | undefined {
+  const text = stopAtInput.value.trim();
+  return text && !((readValue(text) ?? 0) > 0) ? `"${text}" isn't a time after the start. Try 10m, or leave Stop at empty to run until stopped.` : undefined;
+}
+
 // Each run has a token, so a run overtaken by a newer one can't report or start anything.
 let runToken = 0;
 
@@ -816,9 +842,9 @@ async function simulateRun(): Promise<void> {
   dcSolved = false;
   simWarnings.clear();
   commitTypedValue();
-  const stopText = stopAtInput.value.trim();
-  if (stopText && !((readValue(stopText) ?? 0) > 0)) {
-    writeLog(`"${stopText}" isn't a time after the start. Try 10m, or leave Stop at empty to run until stopped.`, "error");
+  const stopProblem = stopAtProblem();
+  if (stopProblem) {
+    writeLog(stopProblem, "error");
     return;
   }
   const schematic = doc.schematic;
@@ -865,7 +891,7 @@ async function simulateRun(): Promise<void> {
     lastRun = run;
     for (const view of views.values()) view.update(run);
     log.push({ text: `Operating point solved in ${Math.round(run.op.stats.elapsedMs)} ms (${run.op.stats.unknowns} unknowns).`, kind: "" });
-    const stale = buildNetlist(doc.schematic).text !== netlist.text;
+    const stale = runSignature(buildNetlist(doc.schematic)) !== runSignature(netlist);
     if (stale) log.push({ text: "The circuit changed during this run, so these results are out of date.", kind: "warning" });
     else startLive(run, netlist.text, instruments, scopes);
   } catch (error) {
@@ -888,6 +914,13 @@ let live: LiveRun | undefined;
 let liveFrame = 0;
 const stopAtInput = el("input", { placeholder: "never", title: "Simulated time to stop at, such as 10m", ariaLabel: "Stop at simulated time" });
 stopAtInput.className = "stop-at";
+// A run under way takes a new time straight away, and one it has already passed stops it there.
+stopAtInput.onchange = () => {
+  if (activity !== "run") return;
+  const problem = stopAtProblem();
+  if (problem) writeLog(problem, "error");
+  else live?.setStopAt(readValue(stopAtInput.value));
+};
 const speedSelect = el("select", { ariaLabel: "Simulation speed", title: "How fast simulated time passes" },
   el("option", { value: "auto", textContent: "Auto speed" }),
   el("option", { value: "real", textContent: "Real time" }),
@@ -943,7 +976,8 @@ function liveVectors(run: RunData, instruments: SchComponent[]): string[] {
 
 function updateWireVoltages(run: RunData, result: SimResult): void {
   if (!canvas.probes.size && !showVoltages) return;
-  showProbes(result, doc.schematic, run.pinNets);
+  // Live data holds only what's being watched, and the rest of the wires keep their operating point.
+  showProbes(result, doc.schematic, run.pinNets, run.op);
 }
 
 function updateIndicators(run: RunData, result: SimResult): void {
@@ -975,6 +1009,7 @@ function startLive(run: RunData, netlist: string, instruments: SchComponent[], s
   let dirtyFrame = false;
   // Buffers belong to one run, so a stopped run's last messages can't reach the next one's.
   let buffer: LiveBuffer | undefined;
+  let names: string[] = [];
   const draw = () => {
     liveFrame = live ? requestAnimationFrame(draw) : 0;
     if (!dirtyFrame || !buffer) return;
@@ -989,14 +1024,17 @@ function startLive(run: RunData, netlist: string, instruments: SchComponent[], s
     runState.textContent = `Running, t = ${formatSI(simTime, "s")}`;
   };
   live = new LiveRun(netlist, keep, liveRate(instruments, netlist), stopAt && stopAt > 0 ? stopAt : undefined, {
-    onReady(names, warnings) {
-      buffer = new LiveBuffer(names);
+    onReady(kept, warnings) {
+      names = kept;
+      buffer = new LiveBuffer(kept);
       const before = log.length;
       logWarnings(warnings);
       if (log.length > before) sheetTabs.show("Results");
     },
     onChunk(time, values, reached) {
       buffer?.append(time, values);
+      // Decoders such as the serial terminal see every sample, however late the next redraw is.
+      for (const view of views.values()) view.stream?.(run, time, (name) => values[names.indexOf(name.toLowerCase())]);
       simTime = reached;
       dirtyFrame = true;
     },
@@ -1045,7 +1083,7 @@ function autoTimePerDiv(netlist: string): number {
   return longest > 0 ? (longest * 5) / 10 : 1e-3;
 }
 
-function showProbes(op: SimResult, schematic: Schematic, pinNets: Map<string, Map<string, string>>): void {
+function showProbes(op: SimResult, schematic: Schematic, pinNets: Map<string, Map<string, string>>, otherwise?: SimResult): void {
   if (!showVoltages || schematic.components.length > 80) return;
   canvas.probes.clear();
   const seen = new Set<string>();
@@ -1054,7 +1092,7 @@ function showProbes(op: SimResult, schematic: Schematic, pinNets: Map<string, Ma
     for (const pin of comp.pins) {
       const net = nets?.get(pin.name);
       if (!net || net === "0" || seen.has(net)) continue;
-      const v = findVector(op, `v(${net})`);
+      const v = findVector(op, `v(${net})`) ?? (otherwise && findVector(otherwise, `v(${net})`));
       if (!v) continue;
       seen.add(net);
       canvas.probes.set(`${comp.id}/${pin.name}`, formatSI(v.re[v.re.length - 1], "V"));
@@ -1123,16 +1161,23 @@ function dialog(title: string, build: (body: HTMLElement, close: () => void) => 
 
 /** Windows that show results from an earlier circuit, closed when another file opens. */
 const resultWindows = new Map<HTMLElement, string>();
-function resultWindow(title: string, width: number, height: number) {
-  const win = floatingWindow(sheetHost, title, width, height, () => resultWindows.delete(win.root));
-  resultWindows.set(win.root, title);
+function resultWindow(title: string, width: number, height: number, results: SimResult[]) {
+  // What the engine said about these results reaches the log and Issues, whatever the analysis.
+  const warnings = results.flatMap((result) => result.warnings);
+  logWarnings(warnings);
+  // A run cut short mustn't look finished, even after the log has moved on.
+  const cutShort = warnings.find((warning) => warning.includes("results are partial"));
+  const name = cutShort ? `${title} (partial)` : title;
+  const win = floatingWindow(sheetHost, name, width, height, () => resultWindows.delete(win.root));
+  resultWindows.set(win.root, name);
+  if (cutShort) win.body.append(el("p", { className: "field-error pad", textContent: cutShort }));
   return win;
 }
 
 function grapher(title: string, runs: SweepRun[]): void {
   const first = runs[0]?.result;
   if (!first) return;
-  const win = resultWindow(title, 620, 420);
+  const win = resultWindow(title, 620, 420, runs.map((r) => r.result));
   if (!first.axis) {
     const rows = runs.flatMap((r) => r.result.vectors.map((v) => `${runs.length > 1 ? `${r.label}  ` : ""}${v.name} = ${formatSI(v.re[0], v.unit)}`));
     const pre = el("pre", { textContent: rows.join("\n") });
@@ -1156,10 +1201,14 @@ function grapher(title: string, runs: SweepRun[]): void {
     onclick: () => void exportText(`${stem()}-${first.analysis}.csv`, "csv", runs.length > 1 ? runsToCsv(runs) : resultToCsv(first)),
   }));
   const names = first.vectors.map((v) => v.name);
+  // A net with no AC signal, such as a supply rail, has no gain to draw.
+  const signals = isAc ? acSignals(first) : new Set(names);
   // Several runs of several nets are too many lines to read, so they start from the likely output.
-  const output = runs.length > 1 ? names.find((n) => n.toLowerCase() === `v(${circuitChoices().output})`.toLowerCase()) : undefined;
-  const picked = new Set(output ? [output] : names.filter((n) => n.startsWith("v(") && !n.includes(".")).slice(0, 4));
-  if (!picked.size && names[0]) picked.add(names[0]);
+  const output = runs.length > 1 ? names.find((n) => n.toLowerCase() === `v(${circuitChoices().output})`.toLowerCase() && signals.has(n)) : undefined;
+  const picked = new Set(output ? [output] : names.filter((n) => n.startsWith("v(") && !n.includes(".") && signals.has(n)).slice(0, 4));
+  const anySignal = names.find((n) => signals.has(n));
+  if (!picked.size && anySignal) picked.add(anySignal);
+  if (!signals.size) win.body.insertBefore(el("p", { className: "muted pad", textContent: "No AC signal reaches any net here, so there's no gain to plot. Add an AC source or a function generator." }), plot.canvas);
   // A curve keeps its look as others are ticked and unticked.
   const looks = new Map<string, number>();
   const lookOf = (label: string) => {
@@ -1172,13 +1221,15 @@ function grapher(title: string, runs: SweepRun[]): void {
     const angle: Series[] = [];
     for (const run of runs) {
       const axis = run.result.axis!.re;
+      const decibels = isAc ? acDecibels(run.result) : undefined;
       for (const vector of run.result.vectors) {
         if (!picked.has(vector.name)) continue;
         const label = runs.length > 1 ? `${vector.name} ${run.label}` : vector.name;
         const look = lookOf(label);
-        if (vector.im) {
-          const db = Float64Array.from(vector.re, (re, i) => 20 * Math.log10(Math.hypot(re, vector.im![i]) || 1e-30));
-          const deg = Float64Array.from(vector.re, (re, i) => (Math.atan2(vector.im![i], re) * 180) / Math.PI);
+        if (decibels && vector.im) {
+          const db = decibels.get(vector.name)!;
+          // Where there's no signal, there's no angle either.
+          const deg = Float64Array.from(vector.re, (re, i) => (Number.isNaN(db[i]) ? NaN : (Math.atan2(vector.im![i], re) * 180) / Math.PI));
           main.push({ label, x: axis, y: db, unit: "dB", ...look });
           angle.push({ label, x: axis, y: deg, unit: "deg", ...look });
         } else {
@@ -1200,7 +1251,7 @@ function grapher(title: string, runs: SweepRun[]): void {
       if (box.checked) picked.add(name); else picked.delete(name);
       redraw();
     };
-    legend.append(el("label", {}, box, name));
+    legend.append(el("label", {}, box, signals.has(name) ? name : `${name} (no AC signal)`));
   }
   redraw();
 }
@@ -1227,7 +1278,10 @@ function circuitChoices() {
     .filter((net) => net !== "0")
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const sources = listSources(netlist.text);
-  const passives = doc.schematic.components.filter((c) => c.refDes && (c.family ?? c.kind) === "resistor").map((c) => c.refDes);
+  // Resistors first, then anything else whose value a sweep can reach by its name.
+  const valued = doc.schematic.components.filter((c) => c.refDes && (c.valueKey ?? "value") in c.params);
+  const isResistor = (c: SchComponent) => (c.family ?? c.kind) === "resistor";
+  const sweepable = [...valued.filter(isResistor), ...valued.filter((c) => !isResistor(c))].map((c) => c.refDes);
   // A signal source is a more useful starting point than a supply, which often has no gain.
   const line = (name: string) => netlist.text.split("\n").find((l) => l.startsWith(`${name} `)) ?? "";
   const signal = sources.find((name) => /\b(ac|sin|pulse|pwl)\b/i.test(line(name)));
@@ -1236,7 +1290,7 @@ function circuitChoices() {
   const scope = doc.schematic.components.find((c) => c.instrument === "oscilloscope");
   const watched = scope && netlist.pinNets.get(scope.id)?.get("B");
   const output = watched && watched !== "0" ? watched : nets[nets.length - 1] ?? "";
-  return { nets, sources, passives, signal, frequency: sine?.[1], output };
+  return { nets, sources, sweepable, signal, frequency: sine?.[1], output };
 }
 
 function fieldDefault(key: string, initial: string, choices: ReturnType<typeof circuitChoices>): string {
@@ -1247,7 +1301,7 @@ function fieldDefault(key: string, initial: string, choices: ReturnType<typeof c
     case "node":
     case "outp": return choices.output || initial;
     case "inp": return choices.nets[0] ?? initial;
-    case "ref": return choices.passives[0] ?? initial;
+    case "ref": return choices.sweepable[0] ?? initial;
     default: return initial;
   }
 }
@@ -1273,7 +1327,7 @@ const ANALYSIS_FIELDS: Record<string, [string, string, string][]> = {
   ac: [["fstart", "Start frequency", "1"], ["fstop", "Stop frequency", "10meg"], ["points", "Points per decade", "40"]],
   dc: [["source", "Source name", "V1"], ["start", "Start", "0"], ["stop", "Stop", "10"], ["step", "Step", "0.1"]],
   fourier: [["node", "Output net", ""], ["fund", "Fundamental frequency", "1k"], ["cycles", "Periods to settle", "10"]],
-  sweep: [["ref", "Component", "R1"], ["param", "Parameter", "value"], ["from", "From", "1k"], ["to", "To", "10k"], ["steps", "Steps", "5"], ["inner", "Run at each step", "tran"], ["tstop", "Stop time (tran)", "10m"]],
+  sweep: [["ref", "Component", ""], ["param", "Parameter", "value"], ["from", "From", "1k"], ["to", "To", "10k"], ["steps", "Steps", "5"], ["inner", "Run at each step", "tran"], ["tstop", "Stop time (tran)", "10m"]],
   temperature: [["from", "From (C)", "-40"], ["to", "To (C)", "125"], ["steps", "Steps", "4"], ["inner", "Run at each step", "op"], ["tstop", "Stop time (tran)", "10m"]],
   montecarlo: [["runs", "Runs", "10"], ["tol", "Tolerance (%)", "5"], ["inner", "Run at each step", "tran"], ["tstop", "Stop time (tran)", "10m"]],
   noise: [["output", "Output, like v(out)", "v(n2)"], ["source", "Input source", "V1"], ["fstart", "Start frequency", "1"], ["fstop", "Stop frequency", "1meg"], ["points", "Points per decade", "20"]],
@@ -1295,8 +1349,8 @@ function innerRequest(v: Record<string, string>): AnalysisRequest {
   return { type: "tran", tstop, tstep: tstop / 1000, tmax: tstop / 200 };
 }
 
-function textWindow(title: string, rows: string[]): void {
-  const win = resultWindow(title, 460, 300);
+function textWindow(title: string, rows: string[], result: SimResult): void {
+  const win = resultWindow(title, 460, 300, [result]);
   const pre = el("pre", { textContent: rows.join("\n") });
   pre.style.overflow = "auto";
   win.body.append(pre);
@@ -1328,6 +1382,7 @@ async function runAnalysis(form: AnalysisForm): Promise<void> {
   try {
     const name = ANALYSIS_NAMES[form.type];
     if (form.type === "sweep") {
+      if (!v.ref?.trim()) throw new Error(circuitChoices().sweepable.length ? "Enter the part to sweep." : "This circuit has no named part with a value to sweep.");
       grapher(name, await parameterSweep(doc.schematic, v.ref, v.param, need(v, "from", "start value"), need(v, "to", "end value"), need(v, "steps", "step count"), innerRequest(v), runSimulation));
     } else if (form.type === "montecarlo") {
       grapher(name, await monteCarlo(doc.schematic, need(v, "runs", "run count"), need(v, "tol", "tolerance"), innerRequest(v), runSimulation));
@@ -1338,7 +1393,6 @@ async function runAnalysis(form: AnalysisForm): Promise<void> {
         type: "noise", output: asOutput(v.output), source: sourceOrThrow(netlist.text, v.source), sweep: "dec", points: need(v, "points", "point count"),
         fstart: need(v, "fstart", "start frequency"), fstop: need(v, "fstop", "stop frequency"),
       });
-      logWarnings(result.warnings);
       if (result.noise) {
         log.push({ text: `Output noise ${formatSI(result.noise.onoiseRms, "V")} rms, input-referred ${formatSI(result.noise.inoiseRms, "V")} rms over the sweep.`, kind: "" });
         for (const row of result.noise.contributions.slice(0, 8)) log.push({ text: `  ${row.device}: ${formatSI(row.rms, "V")} rms`, kind: "" });
@@ -1351,10 +1405,10 @@ async function runAnalysis(form: AnalysisForm): Promise<void> {
         `Gain: ${t.gain.toPrecision(6)}`,
         `Input resistance: ${Number.isFinite(t.inputResistance) ? formatSI(t.inputResistance, "Ohm") : "infinite"}`,
         `Output resistance: ${formatSI(t.outputResistance, "Ohm")}`,
-      ] : ["No result."]);
+      ] : ["No result."], result);
     } else if (form.type === "sensitivity") {
       const result = await runSimulation(netlist.text, { type: "sensitivity", output: asOutput(v.output) });
-      textWindow(name, (result.sensitivity ?? []).map((row) => `${row.device.padEnd(12)} ${row.absolute.toPrecision(4).padStart(12)} per unit   ${Number.isNaN(row.normalized) ? "--" : row.normalized.toPrecision(4)} relative`));
+      textWindow(name, (result.sensitivity ?? []).map((row) => `${row.device.padEnd(12)} ${row.absolute.toPrecision(4).padStart(12)} per unit   ${Number.isNaN(row.normalized) ? "--" : row.normalized.toPrecision(4)} relative`), result);
     } else if (form.type === "polezero") {
       const result = await runSimulation(netlist.text, { type: "polezero", input: [v.inp, v.inn], output: [v.outp, v.outn] });
       const rows: string[] = [];
@@ -1364,7 +1418,7 @@ async function runAnalysis(form: AnalysisForm): Promise<void> {
           rows.push(`${vector.name.padEnd(6)} ${vector.re[i].toPrecision(5)}${im ? ` ${im < 0 ? "-" : "+"} j${Math.abs(im).toPrecision(5)}` : ""}  (${formatSI(Math.hypot(vector.re[i], im) / (2 * Math.PI), "Hz")})`);
         }
       }
-      textWindow(name, rows.length ? rows : ["No poles or zeros found."]);
+      textWindow(name, rows.length ? rows : ["No poles or zeros found."], result);
     } else if (form.type === "fourier") {
       const fund = parseValue(v.fund);
       if (!(fund > 0)) throw new Error("Enter a fundamental frequency.");
@@ -1379,7 +1433,7 @@ async function runAnalysis(form: AnalysisForm): Promise<void> {
         "",
         ...out.rows.map((r) => `#${r.harmonic}  ${formatSI(r.frequency, "Hz").padEnd(11)} ${formatSI(r.magnitude, "V").padEnd(11)} ${r.phaseDeg.toFixed(1)} deg`),
       ];
-      const win = resultWindow(`Fourier of v(${v.node})`, 420, 320);
+      const win = resultWindow(`Fourier of v(${v.node})`, 420, 320, [result]);
       win.body.append(el("pre", { textContent: lines.join("\n") }));
     } else {
       let request: AnalysisRequest;
@@ -1395,7 +1449,6 @@ async function runAnalysis(form: AnalysisForm): Promise<void> {
         request = { type: "op" };
       }
       const result = await runSimulation(netlist.text, request, (f) => { runState.textContent = `${name} ${Math.round(f * 100)}%`; });
-      logWarnings(result.warnings);
       if (result.analysis === "op") lastOpRows = result.vectors.map((vec) => [vec.name, vec.re[0], vec.unit]);
       grapher(name, [{ label: "", result }]);
     }
@@ -1418,7 +1471,7 @@ function analysesDialog(): void {
     const netOptions = el("datalist", { id: "nets-list" }, ...choices.nets.map((net) => el("option", { value: net })));
     const outputOptions = el("datalist", { id: "outputs-list" }, ...choices.nets.map((net) => el("option", { value: `v(${net})` })));
     const sourceOptions = el("datalist", { id: "sources-list" }, ...choices.sources.map((name) => el("option", { value: name })));
-    const partOptions = el("datalist", { id: "parts-list" }, ...choices.passives.map((name) => el("option", { value: name })));
+    const partOptions = el("datalist", { id: "parts-list" }, ...choices.sweepable.map((name) => el("option", { value: name })));
     box.append(netOptions, outputOptions, sourceOptions, partOptions);
     const SUGGEST: Record<string, string> = { source: "sources-list", output: "outputs-list", node: "nets-list", inp: "nets-list", inn: "nets-list", outp: "nets-list", outn: "nets-list", ref: "parts-list" };
     const render = () => {
@@ -1426,11 +1479,13 @@ function analysesDialog(): void {
       const values = (formState.values[select.value] ??= {});
       fields.replaceChildren();
       for (const [key, label, initial] of ANALYSIS_FIELDS[select.value]) {
-        const value = values[key] ?? fieldDefault(key, initial, choices);
+        // An empty field starts over, as the circuit may by now have what it needs, such as a part to sweep.
+        const value = values[key] || fieldDefault(key, initial, choices);
         const input = key === "inner"
           ? el("select", {}, ...INNER_ANALYSES.map(([name, text]) => el("option", { value: name, textContent: text, selected: name === value })))
           : el("input", { value });
         if (SUGGEST[key]) input.setAttribute("list", SUGGEST[key]);
+        if (key === "ref" && !choices.sweepable.length) input.setAttribute("placeholder", "No named part with a value here");
         values[key] = input.value;
         input.oninput = () => { values[key] = input.value; };
         fields.append(el("label", { className: "field" }, label, input));
@@ -1526,6 +1581,7 @@ async function openExample(example: Example): Promise<void> {
 }
 
 function resetAfterLoad(): void {
+  design.reset();
   endActivity();
   modelsDraft = undefined;
   dcSolved = false;
@@ -1542,6 +1598,7 @@ function resetAfterLoad(): void {
   hiddenNotices = "";
   showLimitsBanner();
   savedPath = undefined;
+  savedFormat = "microsim";
   runState.textContent = "";
   canvas.probes.clear();
   canvas.displays.clear();
@@ -1555,7 +1612,7 @@ function resetAfterLoad(): void {
   for (const values of Object.values(formState.values)) for (const key of CIRCUIT_FIELDS) delete values[key];
   for (const win of resultWindows.keys()) win.remove();
   resultWindows.clear();
-  lastSignature = buildNetlist(doc.schematic).text;
+  lastSignature = runSignature(buildNetlist(doc.schematic));
   clearAutosave();
   canvas.select([]);
   canvas.fit();
@@ -1625,13 +1682,14 @@ async function loadBytes(name: string, bytes: Uint8Array, path?: string): Promis
     statusText.textContent = `Importing ${name}...`;
     const { importMs14 } = await import("../importer/index");
     const started = performance.now();
-    const result = importMs14(bytes);
+    const result = importMs14(bytes, { retainSource: true });
     result.schematic.name = stem;
     doc.replace(result.schematic);
     resetAfterLoad();
     issues = result.issues;
     showLimitsBanner();
     importedAnalyses = result.analyses;
+    if (result.format.application === "Microsim" && lower.endsWith(".ms14")) { savedFormat = "ms14"; savedPath = path; }
     statusText.textContent = `Imported ${name} in ${Math.round(performance.now() - started)} ms.`;
     showFileIssues();
   } catch (error) {
@@ -1641,6 +1699,7 @@ async function loadBytes(name: string, bytes: Uint8Array, path?: string): Promis
 }
 
 let savedPath: string | undefined;
+let savedFormat: "microsim" | "ms14" = "microsim";
 
 /** A browser downloads without asking where, so a new name has to be chosen here. */
 function askDownloadName(): void {
@@ -1649,21 +1708,27 @@ function askDownloadName(): void {
     if (!name) return;
     doc.schematic.name = name;
     // The netlist's first line carries the name, and that's no reason to call results out of date.
-    lastSignature = buildNetlist(doc.schematic).text;
-    void saveCircuit();
+    lastSignature = runSignature(buildNetlist(doc.schematic));
+    void saveCircuit(false, "microsim");
   }, stem(), "Download");
 }
 
-async function saveCircuit(saveAs = false): Promise<void> {
+async function saveCircuit(saveAs = false, format = savedFormat, flattenNative = false): Promise<void> {
   commitTypedValue();
-  if (saveAs && !isTauri()) {
+  if (saveAs && !isTauri() && format === "microsim") {
     askDownloadName();
     return;
   }
   try {
     const contents = serializeCircuit({ schematic: doc.schematic, analyses: importedAnalyses, issues });
-    const used = await saveFile(`${stem()}.${FILE_EXTENSION}`, FILE_EXTENSION, contents, saveAs ? undefined : savedPath);
+    const payload = format === "ms14" ? serializeMs14({ schematic: doc.schematic, analyses: importedAnalyses, issues }, { flattenNative }) : contents;
+    const used = await saveFile(`${stem()}.${format}`, format, payload, saveAs || format !== savedFormat ? undefined : savedPath);
     if (!used) return;
+    if (flattenNative) {
+      writeLog("Exported flattened .ms14: native sheets and records were rebuilt from the current editor circuit. Imported scripts, hierarchy and unsupported native records are retained only in the editor extension, not reproduced as native behavior.", "warning");
+      return;
+    }
+    savedFormat = format;
     clearAutosave();
     if (isTauri()) {
       savedPath = used;
@@ -1960,6 +2025,8 @@ const mod = isMac() ? "Cmd" : "Ctrl";
 // A MacBook's top row sends media keys unless Fn is held, so F5 and F6 are no use as the labels.
 const runKey = isMac() ? "Cmd+Return" : "F5";
 const analysesKey = isMac() ? "Cmd+Shift+Return" : "F6";
+const design = new DesignUI(doc, dialog, renderPalette, () => lastRun, changeSetting);
+renderPalette();
 const MENUS: Record<string, MenuItem[]> = {
   File: [
     // Browsers keep this shortcut for a new window.
@@ -1967,11 +2034,21 @@ const MENUS: Record<string, MenuItem[]> = {
     ["Open...", () => void openCircuit(), `${mod}+O`],
     ["Save", () => void saveCircuit(), `${mod}+S`],
     ["Save as...", () => void saveCircuit(true), `${mod}+Shift+S`],
+    ["Save as .ms14...", () => void saveCircuit(true, "ms14")],
+    ["Export flattened .ms14...", () => void saveCircuit(true, "ms14", true)],
+    ["Save as .microsim...", () => void saveCircuit(true, "microsim")],
     // A native menu leaves focus in a field being typed in.
     ["Export schematic as SVG", () => { commitTypedValue(); void exportText(`${stem()}.svg`, "svg", schematicToSvg(doc.schematic)); }],
     ["Export SPICE netlist", () => { commitTypedValue(); void exportText(`${stem()}.cir`, "cir", buildNetlist(doc.schematic).text); }],
   ],
   Examples: EXAMPLES.map((example): MenuItem => [example.name, () => void openExample(example)]),
+  Design: [
+    ["PCB layout...", () => design.pcb()],
+    ["LabVIEW integration...", () => design.labview()],
+    ["VHDL / FPGA design...", () => design.compiler("vhdl")],
+    ["Component database...", () => design.components()],
+    ["C compiler (8051)...", () => design.compiler("c")],
+  ],
   Edit: [
     ["Undo", () => undoDocument(), `${mod}+Z`],
     ["Redo", () => undoDocument(true), `${mod}+Shift+Z`],
@@ -2002,6 +2079,8 @@ const MENUS: Record<string, MenuItem[]> = {
         dcSolved = false;
         const token = runToken;
         const netlist = buildNetlist(doc.schematic);
+        log = [];
+        simWarnings.clear();
         if (netlist.errors.length) { writeLog(netlist.errors.join(" "), "error"); return; }
         setActivity("analysis", "Running stored analyses...");
         for (const request of importedAnalyses) {
@@ -2015,7 +2094,9 @@ const MENUS: Record<string, MenuItem[]> = {
             writeLog(`${ANALYSIS_NAMES[request.type]}: ${friendly(error)}`, "error");
           }
         }
-        if (token === runToken) setActivity("idle");
+        if (token !== runToken) return;
+        setActivity("idle");
+        sheetTabs.show("Results");
       })();
     }],
   ],
@@ -2038,20 +2119,21 @@ const MENUS: Record<string, MenuItem[]> = {
         : "Pan with a right-drag or two fingers. Zoom with the mouse wheel, a pinch, or by scrolling with Ctrl held.",
       "The Assistant tab can build and test circuits for you. It needs an Anthropic API key.",
       "In a narrow window, the Panel button shows Properties and the Assistant.",
+      "Design opens PCB layout, LabVIEW Web Services, a component catalogue and source editors for C/VHDL. Builds require npm run design:bridge and installed compilers. Tank, conveyor and styled instruments are in the palette.",
     ]) list.append(el("li", { textContent: tip }));
     box.append(list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
   })], ["What Microsim doesn't do", () => dialog("What Microsim doesn't do", (box, close) => {
     const list = el("ul");
     list.style.paddingLeft = "18px";
     for (const limit of [
-      "Microcontrollers, LCDs and serial ports aren't simulated. Circuits with them open and run, but those parts do nothing, and a notice says so.",
-      "LabVIEW co-simulation and instruments aren't supported.",
-      "There's no component database. The parts list is generic, and you can add real parts by pasting their SPICE models.",
+      "The built-in 8051 firmware core executes Intel HEX programs with GPIO and timers. Imported NI MCU models, PICs, LCDs and serial ports are still unsupported. UART, external bus waveforms and electrical chip power behavior are not implemented.",
+      "Design > LabVIEW integration has an independent local numeric dataflow runtime and optional HTTP/native VI adapters. Local mode does not read .vi binaries. Native VI mode requires LabVIEW and is not yet verified against a real installation; synchronized NI co-simulation is not implemented.",
+      "Design > Component database imports embedded .ms14 parts, catalogue JSON and supported installed NI Jet databases through the local bridge. NI's collection is not bundled; native graphics and generated instance parameters are not reproduced.",
       "Instruments are limited to oscilloscope, multimeter, wattmeter, Bode plotter, logic analyzer, function generator and clock.",
       "Distortion, worst-case and RF analyses aren't available.",
       "Sheets from files are flattened, so there's no hierarchical or multi-page editing.",
-      "It reads .ms14 files but can't save them. Files from older versions may open, but haven't been tested.",
-      "There's no PCB layout or transfer.",
+      "File > Save as .ms14 writes new circuits with native symbols and connections (checked in Multisim 14.2). Imported circuits preserve original native records with parameter edits; structural edits to imported circuits currently require .microsim.",
+      "Design > PCB layout supports two-layer routing, plated vias and KiCad/Gerber/drill exports. Zones, autorouting, SMD pads, silkscreen and Ultiboard transfer are not implemented.",
       "Device models and logic levels are approximations, so results may differ from other simulators.",
     ]) list.append(el("li", { textContent: limit }));
     box.append(list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));

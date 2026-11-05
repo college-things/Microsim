@@ -5,6 +5,7 @@
 import { Circuit } from "./circuit";
 import { VoltageSource } from "./devices";
 import { parseNumber } from "./expr";
+import { Mcu8051 } from './mcu-digital';
 import { Comparator, Hysteresis, IdealSwitch, PhaseController, SquareWave, SwitchingLoss, TriggeredPwl } from "./codemodels";
 import {
   Clock,
@@ -249,6 +250,20 @@ export function buildXspice(h: XHost, ports: XPort[], m: XModel): boolean {
   }
 
   switch (type) {
+    case 'd_mcu8051': {
+      if(ports.length!==2||flatten(ports[0]).length!==32||flatten(ports[1]).length!==1)throw new Error('8051: expected 32 port pins and a reset pin.');
+      const program=m.str('program',''),frequency=m.num('frequency',12e6);
+      if(!program.length||program.length>131072||program.length%2||!/^[\da-f]+$/i.test(program))throw new Error('8051: program must be 1–65536 hexadecimal bytes.');
+      if(!Number.isFinite(frequency)||frequency<12||frequency>100e6)throw new Error('8051: oscillator must be 12 Hz–100 MHz.');
+      const code=Uint8Array.from(program.match(/../g)!,b=>parseInt(b,16));
+      const pins=flatten(ports[0]).map(h.ref),reset=h.ref(flatten(ports[1])[0]);
+      c.deferred.push(()=>{
+        const d=domain(c),clock=d.internalNet(),echo=d.addDriver(clock,2);
+        const lows=pins.map(n=>d.outputDriver(c,n)),highs=pins.map((n,i)=>i<8?-1:d.outputDriver(c,n,true));
+        d.addModel(new Mcu8051(clock,echo,d.inputNet(c,reset),pins.map(n=>d.inputNet(c,n)),lows,highs,12/frequency,code,d));
+      });
+      return true;
+    }
     case "d_pulldown":
     case "d_pullup": {
       const node = h.ref(flatten(ports[0])[0]!);

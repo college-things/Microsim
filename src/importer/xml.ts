@@ -144,11 +144,15 @@ export function walk(root: XmlNode, visit: (node: XmlNode) => void): void {
   }
 }
 
-const ENTITY = /&(amp|lt|gt|quot|apos);/g;
+const ENTITY = /&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);/gi;
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
 
 export function decodeEntities(raw: string): string {
-  return raw.indexOf("&") < 0 ? raw : raw.replace(ENTITY, (_, name: string) => ENTITIES[name]);
+  return raw.indexOf("&") < 0 ? raw : raw.replace(ENTITY, (whole, name: string) => {
+    if (name[0] !== "#") return ENTITIES[name.toLowerCase()] ?? whole;
+    const n = name[1].toLowerCase() === "x" ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+    return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : whole;
+  });
 }
 
 /** Decodes a string value, removing the &ASC prefix or expanding the &UNI escaped form. */

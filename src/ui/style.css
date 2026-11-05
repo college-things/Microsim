@@ -148,6 +148,9 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
 .window-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 8px; border-top: 1px solid var(--line); flex: none; }
 .controls label { display: flex; gap: 4px; align-items: center; }
+.scope-options { flex: none; }
+.scope-options > summary { padding: 6px 8px; cursor: pointer; border-top: 1px solid var(--line); }
+.scope-options .controls { max-height: 110px; overflow-y: auto; }
 .controls input[type="text"], .controls input:not([type]) { width: 68px; }
 .plot { flex: 1; min-height: 0; width: 100%; display: block; }
 .readout { font: 600 30px ui-monospace, Menlo, Consolas, monospace; padding: 16px 12px; text-align: right; background: var(--panel-2); margin: 8px; border-radius: 6px; user-select: text; font-variant-numeric: tabular-nums; }
@@ -204,4 +207,40 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
   .palette { order: 2; border-right: 0; border-top: 1px solid var(--line); max-height: 320px; }
   .panel-toggle { display: none; }
   .statusbar { flex-wrap: wrap; }
+}
+.design-dialog { width: min(1050px, 95vw); max-width: 95vw; }
+.design-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.design-controls .field { min-width: 100px; flex: 1; }
+.design-controls input { width: 100%; min-width: 65px; }
+.design-source { display: block; box-sizing: border-box; width: 100%; min-height: 260px; resize: vertical; font: 13px/1.5 ui-monospace, monospace; margin: 10px 0; white-space: pre; }
+.design-source.compact { min-height: 100px; }
+.design-status { max-height: 220px; overflow: auto; white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; background: var(--panel-2); padding: 12px; }
+.pcb-board { display: block; width: 100%; height: 360px; background: #0c251e; border-radius: 6px; }
+.pcb-board circle[role=button] { cursor: crosshair; }
+.pcb-board circle[role=button]:focus { stroke: white; stroke-width: 0.5; outline: none; }
+.panel-badge { padding: 9px 12px; font-weight: 600; letter-spacing: 0.04em; }
+.tektronix-panel .window-body { background: #e2e7eb; color: #153344; }
+.tektronix-panel .panel-badge { border-bottom: 3px solid #247bb5; }
+.agilent-panel .window-body { background: #e6e3d8; color: #243c39; }
+.agilent-panel .panel-badge { border-bottom: 3px solid #008882; }
+.agilent-panel .readout { margin: 12px; background: #243c39; color: #a6fbc0; padding: 12px; border-radius: 4px; }
+.flow-diagram { display: block; width: 100%; max-height: 280px; border: 1px solid #8886; margin: 10px 0; }
+.flow-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+.flow-table th, .flow-table td { padding: 4px; text-align: left; border-bottom: 1px solid #8884; }
+.flow-table input, .flow-table select { width: 100%; min-width: 70px; box-sizing: border-box; }
+.flow-table td > div { display: flex; gap: 4px; }
+.flow-editor { overflow-x: auto; }
+
+.serial-terminal {
+  margin: 0;
+  padding: 6px 8px;
+  min-height: 120px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font: 12px/1.35 ui-monospace, Consolas, monospace;
+  background: #101410;
+  color: #b8f5b0;
+  border-radius: 4px;
 }

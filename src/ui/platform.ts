@@ -43,13 +43,14 @@ export async function openFile(extensions: string[]): Promise<OpenedFile | undef
 }
 
 /** Asks where to save, unless `path` says. Returns the path used, or undefined if cancelled. */
-export async function saveFile(suggestedName: string, extension: string, contents: string, path?: string): Promise<string | undefined> {
+export async function saveFile(suggestedName: string, extension: string, contents: string | Uint8Array, path?: string): Promise<string | undefined> {
   if (isTauri()) {
     const { save } = await import("@tauri-apps/plugin-dialog");
-    const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+    const { writeTextFile, writeFile } = await import("@tauri-apps/plugin-fs");
     const target = path ?? await save({ defaultPath: suggestedName, filters: [{ name: extension.toUpperCase(), extensions: [extension] }] });
     if (!target) return undefined;
-    await writeTextFile(target, contents);
+    if (typeof contents === "string") await writeTextFile(target, contents);
+    else await writeFile(target, contents);
     return target;
   }
   // Browsers offer no save confirmation, so all this knows is that a download was started. A

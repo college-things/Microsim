@@ -2,8 +2,10 @@
 import { acRms, settledMean } from "./analyses";
 import type { IndicatorSpec, SchComponent } from "./schematic";
 import type { SimResult, SimVector } from "./sim";
+import {parseSpiceNumber} from '../importer/values';
 
 export interface PartDisplay {
+  machine?:{kind:'tank'|'conveyor';fraction:number};
   /** Brightness from 0 to 1. */
   glow?: number;
   /** A digit or reading drawn over the part. */
@@ -71,6 +73,11 @@ export function readIndicator(comp: SchComponent, result: SimResult, nets: Map<s
   };
   const current = (sense: string | undefined) => (sense && ref ? latest(result, senseName(ref, sense)) : undefined);
   const threshold = spec.threshold ?? (spec.thresholdUnit === "A" ? 5e-3 : 2.5);
+  if(comp.kind==='holding-tank'||comp.kind==='conveyor'){
+    const value=across();if(value===undefined||!Number.isFinite(value))return undefined;
+    const tank=comp.kind==='holding-tank',extent=parseSpiceNumber(comp.params[tank?'capacity':'length'])??(tank?100:10);
+    return {machine:{kind:tank?'tank':'conveyor',fraction:Math.max(0,Math.min(1,value/Math.max(extent,1e-6)))},text:`${Number(value.toPrecision(3))} ${tank?'L':'m'}`};
+  }
   switch (spec.kind) {
     case "led":
     case "probe": {

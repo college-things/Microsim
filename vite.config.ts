@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 
 // The desktop shell sets its own policy, which also has to allow its IPC.
-const WEB_CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self' blob:; connect-src 'self' https://api.anthropic.com; base-uri 'self'; form-action 'none'";
+const WEB_CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self' blob:; connect-src 'self' http: https:; base-uri 'self'; form-action 'none'";
 
 export default defineConfig(({ mode }) => ({
   // Relative, so the site works from a subfolder such as a GitHub Pages project URL.

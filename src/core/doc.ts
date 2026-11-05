@@ -138,8 +138,11 @@ export class Doc {
       pins: part.pins.map((pin) => ({ ...pin })),
       spice: part.spice,
       instrument: part.instrument,
+      indicator: part.indicator ? structuredClone(part.indicator) : undefined,
+      graphics: part.kind.startsWith("user:") ? structuredClone(part.graphics) : undefined,
     };
     this.schematic.components.push(comp);
+    if (kind.startsWith("user:") && part.definitions && !this.schematic.definitions.includes(part.definitions)) this.schematic.definitions += `\n${part.definitions}`;
     return comp;
   }
 

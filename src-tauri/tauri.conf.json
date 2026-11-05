@@ -14,7 +14,7 @@
       { "title": "Microsim", "width": 1320, "height": 840, "minWidth": 900, "minHeight": 560, "dragDropEnabled": false }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://api.anthropic.com"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ipc: http: https:"
     }
   },
   "bundle": {
