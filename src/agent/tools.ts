@@ -2,7 +2,7 @@
 import { newId, type Doc } from "../core/doc";
 import { PART_BY_KIND, PARTS } from "../core/library";
 import { acRms, fourier, settledMean } from "../core/analyses";
-import { buildNetlist, listSources, pinWorld, readValue, resolveSource } from "../core/netlist";
+import { buildNetlist, listSources, looseNames, pinWorld, readValue, resolveSource } from "../core/netlist";
 import type { AnalysisRequest, SimResult } from "../core/sim";
 
 export interface ToolSpec {
@@ -229,6 +229,8 @@ function toRequest(input: Record<string, any>, netlist: string): AnalysisRequest
 }
 
 export async function runTool(doc: Doc, name: string, input: Record<string, any>, simulate: SimulateFn): Promise<unknown> {
+  // A person's drag under way ends first, so a tool sees it checked and what a tool does stands.
+  if (name !== "list_parts") doc.settle();
   const need = (ref: string) => {
     const comp = doc.findByRef(ref);
     if (!comp) throw new Error(`No component named ${ref}.`);
@@ -269,6 +271,7 @@ export async function runTool(doc: Doc, name: string, input: Record<string, any>
     }
     case "connect": {
       const wire = doc.connectPins(need(input.from_ref), input.from_pin, need(input.to_ref), input.to_pin);
+      if (!wire) return { ok: true, note: "Those pins were already connected, so nothing changed." };
       doc.notify();
       return wire.points.length ? { ok: true } : { ok: true, note: "No clear wire route, so both pins got the same net label instead. Consider tidy_layout." };
     }
@@ -279,9 +282,15 @@ export async function runTool(doc: Doc, name: string, input: Record<string, any>
     }
     case "tidy_layout": {
       const done = doc.tidyLayout();
-      if (!done) throw new Error("A tidy layout couldn't keep every connection, so the circuit was left as it was.");
+      if (!done) throw new Error("A tidy layout couldn't keep every connection and net name, so the circuit was left as it was.");
       doc.notify();
-      return { ok: true, parts: doc.schematic.components.length, wires: doc.schematic.wires.length };
+      const loose = looseNames(doc.schematic);
+      return {
+        ok: true,
+        parts: doc.schematic.components.length,
+        wires: doc.schematic.wires.length,
+        ...(loose.length ? { note: `Not on any pin, so left below the circuit: ${loose.join(", ")}.` } : {}),
+      };
     }
     case "set_parameter": {
       const comp = need(input.ref);

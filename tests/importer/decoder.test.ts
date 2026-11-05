@@ -70,8 +70,8 @@ describe("container", () => {
   });
 
   it("rejects bad magic", () => {
-    expect(() => decodeContainer(new Uint8Array(ascii("PK this is not a circuit file at all, not even close")))).toThrow(/bad magic/);
-    expect(() => decodeContainer(new Uint8Array(0))).toThrow(/bad magic/);
+    expect(() => decodeContainer(new Uint8Array(ascii("PK this is not a circuit file at all, not even close")))).toThrow(/Not a Multisim/);
+    expect(() => decodeContainer(new Uint8Array(0))).toThrow(/Not a Multisim/);
   });
 
   it("rejects truncation at every length without hanging", () => {

@@ -1,7 +1,7 @@
 // Editable document with undo. The canvas and the assistant both change circuits through this.
 import { PART_BY_KIND } from "./library";
-import { buildNetlist, connectivitySignature, pinWorld } from "./netlist";
-import { emptySchematic, type Point, type SchComponent, type Schematic, type Wire } from "./schematic";
+import { buildNetlist, connectivitySignature, looseNames, onSegment, pinWorld, pointKey } from "./netlist";
+import { emptySchematic, type FreeText, type NetLabel, type Point, type SchComponent, type Schematic, type Wire } from "./schematic";
 
 export { emptySchematic };
 
@@ -11,6 +11,7 @@ export const newId = (prefix: string) => `${prefix}${Date.now().toString(36)}_${
 export interface Clipboard {
   components: SchComponent[];
   wires: Wire[];
+  texts?: FreeText[];
 }
 
 export class Doc {
@@ -21,6 +22,7 @@ export class Doc {
   private redoBeforeEdit: string[] = [];
   private dirtyBeforeEdit = false;
   private listeners = new Set<() => void>();
+  private unsettled: (() => boolean) | undefined;
 
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
@@ -31,8 +33,31 @@ export class Doc {
     for (const fn of this.listeners) fn();
   }
 
+  /**
+   * A drag leaves the circuit mid-move, with its connections unchecked until it ends. This marks
+   * that and how to end it, because whatever acts on the circuit next has to settle it first.
+   */
+  hold(settle: () => boolean): void {
+    this.unsettled = settle;
+  }
+
+  get held(): boolean {
+    return this.unsettled !== undefined;
+  }
+
+  /**
+   * Ends a drag under way through its own connection check. Returns false if the check turned it
+   * down, when a person's next action can stop there, as the sheet just changed under them.
+   */
+  settle(): boolean {
+    const settle = this.unsettled;
+    this.unsettled = undefined;
+    return settle ? settle() : true;
+  }
+
   /** Call before a change so that undo returns here. */
   checkpoint(): void {
+    this.settle();
     this.undoStack.push(JSON.stringify(this.schematic));
     if (this.undoStack.length > 200) this.undoStack.shift();
     // Kept in case this edit is abandoned, so that doesn't cost the person their redo history.
@@ -43,6 +68,7 @@ export class Doc {
   }
 
   undo(): void {
+    this.settle();
     const prev = this.undoStack.pop();
     if (!prev) return;
     this.redoStack.push(JSON.stringify(this.schematic));
@@ -53,6 +79,7 @@ export class Doc {
   }
 
   redo(): void {
+    this.settle();
     const next = this.redoStack.pop();
     if (!next) return;
     this.undoStack.push(JSON.stringify(this.schematic));
@@ -71,7 +98,17 @@ export class Doc {
     this.notify();
   }
 
+  /** Takes back the last checkpoint if nothing has changed since it, as after an edit that was refused. */
+  forgetIfUnchanged(): boolean {
+    if (this.undoStack[this.undoStack.length - 1] !== JSON.stringify(this.schematic)) return false;
+    this.undoStack.pop();
+    this.redoStack = this.redoBeforeEdit;
+    this.dirty = this.dirtyBeforeEdit;
+    return true;
+  }
+
   replace(schematic: Schematic): void {
+    this.settle();
     this.schematic = schematic;
     this.undoStack.length = 0;
     this.redoStack.length = 0;
@@ -101,14 +138,18 @@ export class Doc {
       pins: part.pins.map((pin) => ({ ...pin })),
       spice: part.spice,
       instrument: part.instrument,
+      indicator: part.indicator ? structuredClone(part.indicator) : undefined,
+      graphics: part.kind.startsWith("user:") ? structuredClone(part.graphics) : undefined,
     };
     this.schematic.components.push(comp);
+    if (kind.startsWith("user:") && part.definitions && !this.schematic.definitions.includes(part.definitions)) this.schematic.definitions += `\n${part.definitions}`;
     return comp;
   }
 
   addWire(points: Point[]): Wire {
     const wire: Wire = { id: newId("w"), points: simplify(points) };
-    this.schematic.wires.push(wire);
+    // A single point draws nothing and can't be selected, so it could never be removed.
+    if (wire.points.length > 1) this.schematic.wires.push(wire);
     return wire;
   }
 
@@ -144,7 +185,37 @@ export class Doc {
       this.schematic.wires.push(wire);
       ids.push(wire.id);
     }
+    for (const source of clip.texts ?? []) {
+      const note: FreeText = { ...source, id: newId("t"), x: source.x + dx, y: source.y + dy };
+      this.schematic.texts.push(note);
+      ids.push(note.id);
+    }
     return ids;
+  }
+
+  /**
+   * Pastes at this offset, or further along if that would join the copies to the circuit, and
+   * returns their ids. Returns undefined, adding nothing, if no nearby spot is clear.
+   */
+  pasteClear(clip: Clipboard, offset: number): string[] | undefined {
+    const far = 1e7;
+    const ids = new Set(this.paste(clip, far, far));
+    const alone = connectivitySignature(this.schematic, true);
+    const s = this.schematic;
+    const shift = (dx: number, dy: number) => {
+      for (const c of s.components) if (ids.has(c.id)) { c.x += dx; c.y += dy; }
+      for (const n of s.texts) if (ids.has(n.id)) { n.x += dx; n.y += dy; }
+      for (const w of s.wires) if (ids.has(w.id)) w.points = w.points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+    };
+    shift(offset - far, offset - far);
+    for (let tries = 0; tries < 25; tries++) {
+      if (connectivitySignature(s, true) === alone) return [...ids];
+      shift(40, 40);
+    }
+    s.components = s.components.filter((c) => !ids.has(c.id));
+    s.texts = s.texts.filter((n) => !ids.has(n.id));
+    s.wires = s.wires.filter((w) => !ids.has(w.id));
+    return undefined;
   }
 
   findByRef(refDes: string): SchComponent | undefined {
@@ -152,28 +223,132 @@ export class Doc {
     return this.schematic.components.find((c) => c.refDes.toUpperCase() === wanted);
   }
 
-  /** Draws an orthogonal wire between two pins. */
-  connectPins(a: SchComponent, pinA: string, b: SchComponent, pinB: string): Wire {
+  /** Draws an orthogonal wire between two pins. Returns undefined, changing nothing, if they're already connected. */
+  connectPins(a: SchComponent, pinA: string, b: SchComponent, pinB: string): Wire | undefined {
     const pa = a.pins.find((p) => p.name === pinA);
     const pb = b.pins.find((p) => p.name === pinB);
     if (!pa) throw new Error(`${a.refDes} has no pin "${pinA}". Pins: ${a.pins.map((p) => p.name).join(", ")}.`);
     if (!pb) throw new Error(`${b.refDes} has no pin "${pinB}". Pins: ${b.pins.map((p) => p.name).join(", ")}.`);
     const from = pinWorld(a, pa);
     const to = pinWorld(b, pb);
+    const { name, joined } = this.linkName(from, to);
+    if (joined) return undefined;
     const path = this.clearRoute(from, to);
-    if (path) return this.addWire(path);
-    // A crowded sheet may have no clean path. Visible labels make the same connection, and
-    // can be seen and deleted, unlike a connection with nothing drawn.
-    const isGround = (net?: string) => net === "0" || net?.toLowerCase() === "gnd";
-    const taken = new Set(this.schematic.labels.map((l) => l.net.toUpperCase()));
-    let name = 1;
-    while (taken.has(`LINK${name}`)) name++;
-    const net = isGround(pa.net) ? "0" : isGround(pb.net) ? "0" : pa.net ?? pb.net ?? `LINK${name}`;
-    this.schematic.labels.push(
-      { id: newId("l"), x: from.x, y: from.y, net },
-      { id: newId("l"), x: to.x, y: to.y, net },
-    );
+    if (path && !this.wireProblem(path)) return this.addWire(path);
+    // A crowded sheet may have no clean path, so labels make the same connection.
+    this.linkSpots(from, to, name);
     return { id: "", points: [] };
+  }
+
+  /**
+   * Joins two spots with visible labels, which can be seen and deleted, unlike a connection with
+   * nothing drawn. A spot already showing that name keeps its one label, or deleting it would seem to do nothing.
+   */
+  private linkSpots(from: Point, to: Point, net: string): void {
+    for (const { x, y } of [from, to]) {
+      if (this.schematic.labels.some((l) => l.net === net && l.x === x && l.y === y && !l.hidden)) continue;
+      this.schematic.labels.push({ id: newId("l"), x, y, net });
+    }
+  }
+
+  /** What labels joining two spots should say: what their nets already go by, ground first, or else a new name. */
+  private linkName(a: Point, b: Point): { name: string; joined: boolean } {
+    const s = this.schematic;
+    const { namedNets } = buildNetlist({ ...s, labels: [...s.labels, probeAt(a), probeAt(b, OTHER_PROBE)] });
+    const nets = [namedNets.get(PROBE), namedNets.get(OTHER_PROBE)];
+    namedNets.delete(PROBE);
+    namedNets.delete(OTHER_PROBE);
+    const joined = nets[0] === nets[1];
+    if (nets.includes("0")) return { name: "0", joined };
+    for (const wanted of nets) {
+      for (const [name, net] of namedNets) if (net === wanted) return { name, joined };
+    }
+    const taken = new Set([...namedNets.keys()].map((name) => name.toUpperCase()));
+    let n = 1;
+    while (taken.has(`LINK${n}`)) n++;
+    return { name: `LINK${n}`, joined };
+  }
+
+  /**
+   * Says what a wire along these points would join besides the nets at its two ends, as buildNetlist
+   * reads it. The answer is undefined if it would do no more than two labels at its ends.
+   */
+  wireProblem(points: Point[]): string | undefined {
+    const path = simplify(points);
+    if (path.length < 2) return undefined;
+    const s = this.schematic;
+    const labels = [...s.labels, probeAt(path[0]), probeAt(path[path.length - 1])];
+    const meant = netMembers({ ...s, labels });
+    const drawn = netMembers({ ...s, labels, wires: [...s.wires, { id: "", points: path }] });
+    const meantNet = meant.get(`=${PROBE}`)!.net;
+    const wireNet = drawn.get(`=${PROBE}`)!.net;
+    for (const [key, { net, words }] of drawn) {
+      if (net === wireNet && meant.get(key)?.net !== meantNet) {
+        return `That would also connect the wire to ${words}, so it wasn't drawn. Click another spot, or press Esc to cancel.`;
+      }
+    }
+    return undefined;
+  }
+
+  /** Whether something ending on this spot would join nets that are apart now, as where two wires cross. */
+  crossingAt(at: Point): boolean {
+    const s = this.schematic;
+    const before = netMembers(s);
+    const after = netMembers({ ...s, labels: [...s.labels, probeAt(at)] });
+    const here = after.get(`=${PROBE}`)!.net;
+    const nets = new Set<string>();
+    for (const [key, { net }] of after) {
+      const was = before.get(key)?.net;
+      if (net === here && was !== undefined) nets.add(was);
+    }
+    return nets.size > 1;
+  }
+
+  /**
+   * Ends a hand-drawn wire on the pin or wire clicked, or where it stopped if there's no target.
+   * It connects those and nothing else. With no path for a wire, labels make the connection. If
+   * the corners drawn so far already touch something else, it changes nothing and says why.
+   */
+  finishWire(draft: Point[], target?: Point): { refused?: string; note?: string } {
+    const last = draft[draft.length - 1];
+    if (this.crossingAt(target ?? last)) {
+      return { refused: "Two wires cross there, so ending on that spot would connect them both. Click a little way along the one you mean, or press Esc to cancel." };
+    }
+    for (const tail of target ? [this.clearRoute(last, target), route(last, target)] : [[last]]) {
+      const points = tail && simplify([...draft.slice(0, -1), ...tail]);
+      if (!points || points.length < 2 || this.wireProblem(points)) continue;
+      this.checkpoint();
+      this.addWire(points);
+      return {};
+    }
+    const problem = this.wireProblem(draft);
+    if (problem || !target) return { refused: problem };
+    const { name, joined } = this.linkName(draft[0], target);
+    if (joined) return { note: "Those are already connected." };
+    this.checkpoint();
+    this.linkSpots(draft[0], target, name);
+    return { note: `There's no clear path for a wire there, so both ends got the net name ${name} instead.` };
+  }
+
+  /**
+   * Makes an edit on a copy of the circuit and keeps it only if it reports success, so a refusal
+   * changes nothing at all. Kept parts stay the same objects, as panels hold on to them.
+   */
+  private attempt(edit: () => boolean): boolean {
+    const kept = this.schematic;
+    this.schematic = JSON.parse(JSON.stringify(kept)) as Schematic;
+    let done = false;
+    try {
+      done = edit();
+      if (done) {
+        const parts = new Map(kept.components.map((c) => [c.id, c]));
+        this.schematic.components = this.schematic.components.map((c) => Object.assign(parts.get(c.id) ?? c, c));
+        Object.assign(kept, this.schematic);
+      }
+    } finally {
+      this.schematic = kept;
+    }
+    return done;
   }
 
   /** Removes the wires ending on a pin, and any label on it, cutting that pin's connection. */
@@ -188,159 +363,151 @@ export class Doc {
     const before = buildNetlist(this.schematic).pinNets;
     const net = before.get(comp.id)?.get(pinName);
     if (!net) return;
-    const snapshot = JSON.stringify(this.schematic);
-    // Everything else on this net has to stay together once this pin has left it.
-    const peers: { comp: SchComponent; pin: string }[] = [];
-    for (const other of this.schematic.components) {
-      for (const [name, value] of before.get(other.id) ?? []) {
-        if (value === net && !(other === comp && name === pinName)) peers.push({ comp: other, pin: name });
+    const separated = this.attempt(() => {
+      // Everything else on this net has to stay together once this pin has left it.
+      const peers: { comp: SchComponent; pin: string }[] = [];
+      for (const other of this.schematic.components) {
+        for (const [name, value] of before.get(other.id) ?? []) {
+          if (value === net && !(other.id === comp.id && name === pinName)) peers.push({ comp: other, pin: name });
+        }
       }
-    }
-    this.schematic.wires = this.schematic.wires.filter((w) => !ending(w));
-    this.schematic.labels = this.schematic.labels.filter((l) => !here(l));
-    if (pin.net && pin.net !== "0") delete pin.net;
-    for (let i = 1; i < peers.length; i++) {
-      const nets = buildNetlist(this.schematic).pinNets;
-      const first = nets.get(peers[0].comp.id)?.get(peers[0].pin);
-      if (first === undefined || first !== nets.get(peers[i].comp.id)?.get(peers[i].pin)) {
-        this.connectPins(peers[0].comp, peers[0].pin, peers[i].comp, peers[i].pin);
+      this.schematic.wires = this.schematic.wires.filter((w) => !ending(w));
+      this.schematic.labels = this.schematic.labels.filter((l) => !here(l));
+      const leaving = this.schematic.components.find((c) => c.id === comp.id)!.pins.find((p) => p.name === pinName)!;
+      if (leaving.net && leaving.net !== "0") delete leaving.net;
+      for (let i = 1; i < peers.length; i++) {
+        const nets = buildNetlist(this.schematic).pinNets;
+        const first = nets.get(peers[0].comp.id)?.get(peers[0].pin);
+        if (first === undefined || first !== nets.get(peers[i].comp.id)?.get(peers[i].pin)) {
+          this.connectPins(peers[0].comp, peers[0].pin, peers[i].comp, peers[i].pin);
+        }
       }
-    }
-    // Some pins can't leave a net, such as a ground part's own pin or one touching another pin.
-    const after = buildNetlist(this.schematic).pinNets;
-    const remaining = after.get(comp.id)?.get(pinName);
-    const stillJoined = remaining !== undefined && peers.some((peer) => after.get(peer.comp.id)?.get(peer.pin) === remaining);
-    if (stillJoined) {
-      this.schematic = JSON.parse(snapshot);
-      throw new Error(`${comp.refDes} pin ${pinName} can't be separated from its net, because it's a fixed connection or it touches another pin. Move the part first.`);
-    }
+      // Some pins can't leave a net, such as a ground part's own pin or one touching another pin.
+      const after = buildNetlist(this.schematic).pinNets;
+      const remaining = after.get(comp.id)?.get(pinName);
+      return remaining === undefined || !peers.some((peer) => after.get(peer.comp.id)?.get(peer.pin) === remaining);
+    });
+    if (!separated) throw new Error(`${comp.refDes} pin ${pinName} can't be separated from its net, because it's a fixed connection or it touches another pin. Move the part first.`);
   }
 
   /**
    * Turns or moves parts, rerouting attached wires. Connections must survive, so if routing
-   * can't keep them this restores the circuit and returns false.
+   * can't keep them this leaves the circuit as it was and returns false.
    */
   transformParts(comps: SchComponent[], apply: (c: SchComponent) => void): boolean {
-    const snapshot = JSON.stringify(this.schematic);
-    const before = connectivitySignature(this.schematic);
-    const schematic = this.schematic;
-    // Pins can swap places, so gather every move first and apply them together.
-    const moves = new Map<string, Point>();
-    for (const comp of comps) {
-      const from = comp.pins.map((p) => pinWorld(comp, p));
-      apply(comp);
-      comp.pins.forEach((pin, i) => moves.set(`${from[i].x},${from[i].y}`, pinWorld(comp, pin)));
-    }
-    const moved = (p: Point) => moves.get(`${p.x},${p.y}`);
-    // A label sitting on a pin belongs to that pin's connection, so it travels with the pin.
-    for (const label of schematic.labels) {
-      const to = moved(label);
-      if (to) {
-        label.x = to.x;
-        label.y = to.y;
-      }
-    }
-    const affected = schematic.wires.filter((w) => moved(w.points[0]) || moved(w.points[w.points.length - 1]));
-    schematic.wires = schematic.wires.filter((w) => !affected.includes(w));
-    for (const wire of affected) {
-      const a = wire.points[0];
-      const b = wire.points[wire.points.length - 1];
-      const from = moved(a) ?? a;
-      const to = moved(b) ?? b;
-      wire.points = this.clearRoute(from, to) ?? route(from, to);
-      schematic.wires.push(wire);
-    }
-    if (connectivitySignature(schematic) === before) return true;
-    this.schematic = JSON.parse(snapshot);
-    return false;
+    const ids = new Set(comps.map((c) => c.id));
+    return this.attempt(() => {
+      const parts = this.schematic.components.filter((c) => ids.has(c.id));
+      const move = new PartMove(this, parts);
+      parts.forEach(apply);
+      move.follow(true);
+      return move.connectionsKept();
+    });
   }
 
   /**
-   * Arranges the circuit left to right in connection order, then reroutes every wire.
-   * Keeps all connections, or leaves the circuit as it was and returns false.
+   * Arranges the circuit left to right in connection order, then reroutes every wire. Keeps all
+   * connections and net names, or leaves the circuit as it was and returns false.
    */
   tidyLayout(): boolean {
-    const schematic = this.schematic;
-    const snapshot = JSON.stringify(schematic);
-    const before = connectivitySignature(schematic);
-    const nets = buildNetlist(schematic).pinNets;
-    const parts = schematic.components.filter((c) => c.kind !== "ground");
-    const onNet = new Map<string, SchComponent[]>();
-    for (const comp of parts) {
-      for (const net of nets.get(comp.id)?.values() ?? []) {
-        if (net === "0") continue;
-        if (!onNet.has(net)) onNet.set(net, []);
-        onNet.get(net)!.push(comp);
-      }
-    }
-    const source = (c: SchComponent) => /^(v|i|function-generator|clock)/.test(c.kind);
-    const instrument = (c: SchComponent) => Boolean(c.instrument) && c.instrument !== "function-generator" && c.instrument !== "clock";
-    // Breadth-first from the sources gives each part a column.
-    const column = new Map<SchComponent, number>();
-    const queue = parts.filter((c) => source(c));
-    if (!queue.length && parts[0]) queue.push(parts[0]);
-    for (const comp of queue) column.set(comp, 0);
-    for (let i = 0; i < queue.length; i++) {
-      const comp = queue[i];
-      for (const net of nets.get(comp.id)?.values() ?? []) {
-        for (const next of onNet.get(net) ?? []) {
-          if (column.has(next) || instrument(next)) continue;
-          column.set(next, column.get(comp)! + 1);
-          queue.push(next);
+    return this.attempt(() => {
+      const schematic = this.schematic;
+      const before = connectivitySignature(schematic);
+      const was = buildNetlist(schematic);
+      const nets = was.pinNets;
+      const parts = schematic.components.filter((c) => c.kind !== "ground");
+      const onNet = new Map<string, SchComponent[]>();
+      for (const comp of parts) {
+        for (const net of nets.get(comp.id)?.values() ?? []) {
+          if (net === "0") continue;
+          if (!onNet.has(net)) onNet.set(net, []);
+          onNet.get(net)!.push(comp);
         }
       }
-    }
-    const rows = new Map<number, number>();
-    const last = Math.max(0, ...column.values());
-    for (const comp of parts) {
-      const col = instrument(comp) ? last + 1 : column.get(comp) ?? last;
-      const row = rows.get(col) ?? 0;
-      rows.set(col, row + 1);
-      comp.x = col * 180;
-      comp.y = row * 140;
-    }
-    let groundColumn = 0;
-    const bottom = Math.max(0, ...rows.values()) * 140 + 40;
-    for (const comp of schematic.components) {
-      if (comp.kind !== "ground") continue;
-      comp.x = groundColumn++ * 120;
-      comp.y = bottom;
-    }
-    // Pin-to-pin wires can be rebuilt; anything else stays as a list of points to reconnect.
-    const pinsAt = new Map<string, Point>();
-    for (const comp of schematic.components) {
-      for (const pin of comp.pins) pinsAt.set(`${comp.id}/${pin.name}`, pinWorld(comp, pin));
-    }
-    const groups = new Map<string, Point[]>();
-    for (const comp of schematic.components) {
-      for (const [pin, net] of nets.get(comp.id) ?? []) {
-        if (!groups.has(net)) groups.set(net, []);
-        groups.get(net)!.push(pinsAt.get(`${comp.id}/${pin}`)!);
-      }
-    }
-    schematic.wires = [];
-    schematic.labels = schematic.labels.filter((l) => !l.hidden);
-    for (const label of schematic.labels) {
-      // Named nets stay named, on their first pin.
-      const group = groups.get(label.net);
-      if (group?.[0]) {
-        label.x = group[0].x;
-        label.y = group[0].y;
-      }
-    }
-    for (const [net, points] of groups) {
-      for (let i = 1; i < points.length; i++) {
-        const path = this.clearRoute(points[0], points[i]);
-        if (path) {
-          this.addWire(path);
-        } else {
-          this.schematic.labels.push({ id: newId("l"), x: points[0].x, y: points[0].y, net }, { id: newId("l"), x: points[i].x, y: points[i].y, net });
+      const source = (c: SchComponent) => /^(v|i|function-generator|clock)/.test(c.kind);
+      const instrument = (c: SchComponent) => Boolean(c.instrument) && c.instrument !== "function-generator" && c.instrument !== "clock";
+      // Breadth-first from the sources gives each part a column.
+      const column = new Map<SchComponent, number>();
+      const queue = parts.filter((c) => source(c));
+      if (!queue.length && parts[0]) queue.push(parts[0]);
+      for (const comp of queue) column.set(comp, 0);
+      for (let i = 0; i < queue.length; i++) {
+        const comp = queue[i];
+        for (const net of nets.get(comp.id)?.values() ?? []) {
+          for (const next of onNet.get(net) ?? []) {
+            if (column.has(next) || instrument(next)) continue;
+            column.set(next, column.get(comp)! + 1);
+            queue.push(next);
+          }
         }
       }
-    }
-    if (connectivitySignature(schematic) === before) return true;
-    this.schematic = JSON.parse(snapshot);
-    return false;
+      const rows = new Map<number, number>();
+      const last = Math.max(0, ...column.values());
+      for (const comp of parts) {
+        const col = instrument(comp) ? last + 1 : column.get(comp) ?? last;
+        const row = rows.get(col) ?? 0;
+        rows.set(col, row + 1);
+        comp.x = col * 180;
+        comp.y = row * 140;
+      }
+      let groundColumn = 0;
+      const bottom = Math.max(0, ...rows.values()) * 140 + 40;
+      for (const comp of schematic.components) {
+        if (comp.kind !== "ground") continue;
+        comp.x = groundColumn++ * 120;
+        comp.y = bottom;
+      }
+      // Pin-to-pin wires can be rebuilt; anything else stays as a list of points to reconnect.
+      const pinsAt = new Map<string, Point>();
+      for (const comp of schematic.components) {
+        for (const pin of comp.pins) pinsAt.set(`${comp.id}/${pin.name}`, pinWorld(comp, pin));
+      }
+      const groups = new Map<string, Point[]>();
+      for (const comp of schematic.components) {
+        for (const [pin, net] of nets.get(comp.id) ?? []) {
+          if (!groups.has(net)) groups.set(net, []);
+          groups.get(net)!.push(pinsAt.get(`${comp.id}/${pin}`)!);
+        }
+      }
+      schematic.wires = [];
+      // Named nets stay named, on their first pin, with one label however many it had spread around.
+      // A hidden link with no pin to hold names nothing. A name someone can see, with no pin on its
+      // net, goes below the circuit, as a part landing where it was would silently take that name.
+      const below = Math.max(bottom, ...[...pinsAt.values()].map((p) => p.y), ...schematic.components.map((c) => bodyBox(c).y1)) + 40;
+      const shown = new Set<string>();
+      const loose = new Set<string>();
+      let strays = 0;
+      schematic.labels = schematic.labels.filter((label) => {
+        const first = groups.get(was.namedNets.get(label.net)!)?.[0];
+        if (first) {
+          label.x = first.x;
+          label.y = first.y;
+          const key = `${label.net}\n${Boolean(label.hidden)}`;
+          if (shown.has(key)) return false;
+          shown.add(key);
+          return true;
+        }
+        if (label.hidden) return false;
+        loose.add(label.net);
+        label.x = 0;
+        label.y = Math.ceil(below / 10) * 10 + 30 * strays++;
+        return true;
+      });
+      // Labels carry a net's name as it was given, not as SPICE spells it.
+      const spelled = new Map([...was.namedNets].map(([name, net]) => [net, name]));
+      for (const [net, points] of groups) {
+        for (let i = 1; i < points.length; i++) {
+          const path = this.clearRoute(points[0], points[i]);
+          if (path) this.addWire(path);
+          else this.linkSpots(points[0], points[i], spelled.get(net) ?? net);
+        }
+      }
+      const now = buildNetlist(schematic).pinNets;
+      const namesKept = [...nets].every(([id, pins]) => [...pins].every(([pin, net]) => was.autoNets.has(net) || now.get(id)?.get(pin) === net));
+      // A name that was on no pin must still be on none, as the connection check doesn't read names.
+      const stillLoose = new Set(looseNames(schematic));
+      return namesKept && [...loose].every((name) => stillLoose.has(name)) && connectivitySignature(schematic) === before;
+    });
   }
 
   /** Removes a part and the wires that end on its pins, as those wires go nowhere afterward. */
@@ -394,10 +561,303 @@ export class Doc {
       candidates.push([from, { x: midX + d, y: from.y }, { x: midX + d, y: to.y }, to]);
       candidates.push([from, { x: from.x, y: midY + d }, { x: to.x, y: midY + d }, to]);
     }
-    const clear = candidates.map(simplify).filter((path) => isClear(path, from, to, pins, wires));
-    // Running through a symbol is legal but hard to read, so use that only as a last resort.
     const bodies = this.schematic.components.map(bodyBox);
-    return clear.find((path) => !crossesBody(path, bodies)) ?? clear[0];
+    const best = (paths: Point[][]) => {
+      const clear = paths.map(simplify).filter((path) => isClear(path, from, to, pins, wires));
+      // Running through a symbol is legal but hard to read, so use that only as a last resort.
+      return clear.find((path) => !crossesBody(path, bodies)) ?? clear[0];
+    };
+    return best(candidates) ?? best(sidesteps(from, to, pins));
+  }
+}
+
+/** A stand-in for something touching a spot, as a label joins by the same rules as a wire's end. */
+const PROBE = "\u0001probe";
+const OTHER_PROBE = "\u0001other probe";
+const probeAt = (at: Point, net = PROBE): NetLabel => ({ id: "", x: at.x, y: at.y, net });
+
+/** What's on each net: pins as "part id/pin" and given names as "=name", with how to say each one. */
+function netMembers(schematic: Schematic): Map<string, { net: string; words: string }> {
+  const { pinNets, namedNets } = buildNetlist(schematic);
+  const members = new Map<string, { net: string; words: string }>();
+  for (const comp of schematic.components) {
+    for (const [pin, net] of pinNets.get(comp.id) ?? []) {
+      members.set(`${comp.id}/${pin}`, { net, words: `${comp.refDes || "a part"} pin ${pin}` });
+    }
+  }
+  for (const [name, net] of namedNets) members.set(`=${name}`, { net, words: `the net ${name}` });
+  return members;
+}
+
+/** Something joined to a wire at a spot: another wire, a part's pin or a net's label. */
+interface Contact {
+  at: Point;
+  wire?: Wire;
+  comp?: SchComponent;
+  label?: NetLabel;
+}
+
+/** What is joined to each wire, by the same rules as buildNetlist. */
+function wireContacts(schematic: Schematic): Map<Wire, Contact[]> {
+  const CELL = 200;
+  const contacts = new Map<Wire, Contact[]>(schematic.wires.map((w) => [w, []]));
+  const cells = new Map<string, { a: Point; b: Point; wire: Wire }[]>();
+  for (const wire of schematic.wires) {
+    for (let i = 1; i < wire.points.length; i++) {
+      const a = wire.points[i - 1];
+      const b = wire.points[i];
+      for (let cx = Math.floor(Math.min(a.x, b.x) / CELL); cx <= Math.floor(Math.max(a.x, b.x) / CELL); cx++) {
+        for (let cy = Math.floor(Math.min(a.y, b.y) / CELL); cy <= Math.floor(Math.max(a.y, b.y) / CELL); cy++) {
+          const k = `${cx},${cy}`;
+          const list = cells.get(k);
+          if (list) list.push({ a, b, wire });
+          else cells.set(k, [{ a, b, wire }]);
+        }
+      }
+    }
+  }
+  const rest = (at: Point, on: Omit<Contact, "at">, cornersOnly = false) => {
+    for (const { a, b, wire } of cells.get(`${Math.floor(at.x / CELL)},${Math.floor(at.y / CELL)}`) ?? []) {
+      if (wire === on.wire || !onSegment(at, a, b)) continue;
+      // A corner resting on another wire's run doesn't join it, though two corners do.
+      if (cornersOnly && pointKey(at) !== pointKey(a) && pointKey(at) !== pointKey(b)) continue;
+      contacts.get(wire)!.push({ at, ...on });
+      if (on.wire) contacts.get(on.wire)!.push({ at, wire });
+    }
+  };
+  for (const comp of schematic.components) for (const pin of comp.pins) rest(pinWorld(comp, pin), { comp });
+  for (const label of schematic.labels) rest({ x: label.x, y: label.y }, { label });
+  for (const wire of schematic.wires) {
+    wire.points.forEach((p, i) => rest(p, { wire }, i > 0 && i < wire.points.length - 1));
+  }
+  return contacts;
+}
+
+/** The wire from a moved pin's new spot to where it's held, keeping right angles. */
+function bend(path: Point[], to: Point, held: boolean): Point[] {
+  const points = simplify(path);
+  const [start, next, after] = points;
+  if (!next) return route(to, start);
+  const flat = start.y === next.y;
+  const upright = start.x === next.x;
+  const corner = { x: flat ? next.x : to.x, y: flat ? to.y : next.y };
+  if (after) {
+    // Slides the first run along the second, so the rest of the wire stays where it is.
+    const square = (flat && next.x === after.x) || (upright && next.y === after.y);
+    return square ? [to, corner, ...points.slice(2)] : [...route(to, start), ...points.slice(1)];
+  }
+  if (!flat && !upright) return [...route(to, start), next];
+  // A held run stays on its line, with a jog at the pin. A free one moves along with the part.
+  return [to, held ? { x: flat ? to.x : next.x, y: flat ? next.y : to.y } : corner, next];
+}
+
+/** How far along a wire each run through this spot is, counting its points from 0. */
+function placesOnWire(points: Point[], at: Point): number[] {
+  const places: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    if (onSegment(at, a, b)) places.push(i - 1 + Math.hypot(at.x - a.x, at.y - a.y) / (Math.hypot(b.x - a.x, b.y - a.y) || 1));
+  }
+  return places;
+}
+
+/** A wire ending on a moving pin. */
+interface FollowingWire {
+  wire: Wire;
+  original: Point[];
+  /** The part that stays put, and the free parts either side leading to moving pins. Absent if nothing holds it. */
+  held?: {
+    middle: Point[];
+    head?: Point[];
+    tail?: Point[];
+    headOnRun: boolean;
+    tailOnRun: boolean;
+  };
+}
+
+/**
+ * One move of the selected parts, from where they began. Wires follow their pins, while anything
+ * else joined to a wire holds that spot of it in place, so tees and named nets stay connected.
+ */
+export class PartMove {
+  private before: string;
+  private pins: { comp: SchComponent; pin: Point; from: Point }[];
+  private comps: { comp: SchComponent; x: number; y: number }[];
+  private carried: { wire: Wire; original: Point[] }[] = [];
+  private following: FollowingWire[] = [];
+  private labels: { label: NetLabel; from: Point; onPin: boolean }[] = [];
+  private notes: { note: FreeText; x: number; y: number }[] = [];
+  /** New wires back to spots that can't follow, such as a run passing through a pin. */
+  private leads: { from: Point; wire: Wire; added: boolean }[] = [];
+
+  constructor(private doc: Doc, comps: SchComponent[], selection: Set<string> = new Set()) {
+    const s = doc.schematic;
+    this.before = connectivitySignature(s, true);
+    this.comps = comps.map((comp) => ({ comp, x: comp.x, y: comp.y }));
+    this.pins = comps.flatMap((comp) => comp.pins.map((pin) => ({ comp, pin, from: pinWorld(comp, pin) })));
+    this.notes = s.texts.filter((n) => selection.has(n.id)).map((note) => ({ note, x: note.x, y: note.y }));
+    const moving = new Set(comps);
+    const spots = new Set(this.pins.map((p) => pointKey(p.from)));
+    const contacts = wireContacts(s);
+
+    // Selected wires travel with the selection, unless they're joined to something staying put.
+    const carried = new Set(s.wires.filter((w) => selection.has(w.id)));
+    const staysPut = (c: Contact) => (c.comp && !moving.has(c.comp)) || (c.wire && !carried.has(c.wire));
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const wire of carried) {
+        if (contacts.get(wire)!.some(staysPut)) {
+          carried.delete(wire);
+          changed = true;
+        }
+      }
+    }
+    this.carried = [...carried].map((wire) => ({ wire, original: wire.points }));
+
+    // A label on a pin holds that pin's connection, and one on a carried wire goes with it.
+    const onlyNotes = !comps.length && !carried.size;
+    const onWire = new Map<NetLabel, Wire[]>();
+    for (const [wire, list] of contacts) {
+      for (const { label } of list) if (label) onWire.set(label, [...(onWire.get(label) ?? []), wire]);
+    }
+    const travelling = new Set<NetLabel>();
+    for (const label of s.labels) {
+      const wires = onWire.get(label) ?? [];
+      const onPin = spots.has(pointKey(label));
+      const picked = selection.has(label.id) && (onlyNotes || wires.every((w) => carried.has(w)));
+      if (!onPin && !picked && !wires.some((w) => carried.has(w))) continue;
+      travelling.add(label);
+      this.labels.push({ label, from: { x: label.x, y: label.y }, onPin });
+    }
+
+    const ends = new Set<string>();
+    const passes = new Set<string>();
+    for (const wire of s.wires) {
+      const points = wire.points;
+      if (carried.has(wire) || points.length < 2) continue;
+      const first = points[0];
+      const last = points[points.length - 1];
+      ends.add(pointKey(first));
+      ends.add(pointKey(last));
+      const holds = contacts.get(wire)!.filter((c) => {
+        if (c.comp) return !moving.has(c.comp);
+        if (c.label) return !travelling.has(c.label);
+        // A wire ending on a moving pin leaves with that pin.
+        const other = c.wire!.points;
+        const leaves = spots.has(pointKey(c.at)) && (pointKey(other[0]) === pointKey(c.at) || pointKey(other[other.length - 1]) === pointKey(c.at));
+        return !leaves;
+      });
+      for (const c of contacts.get(wire)!) if (c.comp && moving.has(c.comp)) passes.add(pointKey(c.at));
+      if (spots.has(pointKey(first)) || spots.has(pointKey(last))) this.following.push(this.planWire(wire, holds, spots));
+    }
+    // Pins resting on what can't follow them keep their connection through a new lead.
+    const fixedPins = new Set(s.components.filter((c) => !moving.has(c)).flatMap((c) => c.pins.map((p) => pointKey(pinWorld(c, p)))));
+    const led = new Set<string>();
+    for (const { from } of this.pins) {
+      const spot = pointKey(from);
+      if (ends.has(spot) || led.has(spot) || !(passes.has(spot) || fixedPins.has(spot))) continue;
+      led.add(spot);
+      this.leads.push({ from, wire: { id: newId("w"), points: [] }, added: false });
+    }
+  }
+
+  private planWire(wire: Wire, holds: Contact[], spots: Set<string>): FollowingWire {
+    const points = wire.points;
+    const n = points.length - 1;
+    const headMoves = spots.has(pointKey(points[0]));
+    const tailMoves = spots.has(pointKey(points[n]));
+    const placed: { place: number; at: Point }[] = [];
+    if (!headMoves) placed.push({ place: 0, at: points[0] });
+    if (!tailMoves) placed.push({ place: n, at: points[n] });
+    for (const hold of holds) for (const place of placesOnWire(points, hold.at)) placed.push({ place, at: hold.at });
+    if (!placed.length) return { wire, original: points };
+    placed.sort((a, b) => a.place - b.place);
+    const from = placed[0];
+    const to = placed[placed.length - 1];
+    const joined = (at: Point) => holds.some((h) => (h.wire || h.label) && pointKey(h.at) === pointKey(at));
+    return {
+      wire,
+      original: points,
+      held: {
+        middle: [from.at, ...points.slice(Math.ceil(from.place), Math.floor(to.place) + 1), to.at],
+        head: headMoves ? [...points.slice(0, Math.floor(from.place) + 1), from.at] : undefined,
+        tail: tailMoves ? [...points.slice(Math.ceil(to.place)).reverse(), to.at] : undefined,
+        headOnRun: from.place < n || joined(from.at),
+        tailOnRun: to.place > 0 || joined(to.at),
+      },
+    };
+  }
+
+  /** Puts everything at this offset from where it began. */
+  shift(dx: number, dy: number): void {
+    for (const { comp, x, y } of this.comps) { comp.x = x + dx; comp.y = y + dy; }
+    for (const { note, x, y } of this.notes) { note.x = x + dx; note.y = y + dy; }
+    for (const { wire, original } of this.carried) wire.points = original.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+    for (const { label, from, onPin } of this.labels) {
+      if (!onPin) { label.x = from.x + dx; label.y = from.y + dy; }
+    }
+    this.follow();
+  }
+
+  /** Brings wires and labels to the pins where they are now. Careful routes around everything, which is slower. */
+  follow(careful = false): void {
+    // Pins can swap places, so this always works from where they began.
+    const to = new Map(this.pins.map(({ comp, pin, from }) => [pointKey(from), pinWorld(comp, pin)]));
+    for (const { label, from, onPin } of this.labels) {
+      if (onPin) Object.assign(label, to.get(pointKey(from)));
+    }
+    if (careful) {
+      // Routes keep clear of what stays, and of each other as they're placed.
+      for (const f of this.following) f.wire.points = f.held?.middle ?? [];
+      for (const lead of this.leads) lead.wire.points = [];
+    }
+    const lead = (at: Point, path: Point[], held: boolean) => {
+      const clear = careful ? this.doc.clearRoute(at, path[path.length - 1]) : undefined;
+      return clear ?? bend(path, at, held);
+    };
+    for (const { wire, original, held } of this.following) {
+      const first = original[0];
+      const last = original[original.length - 1];
+      const a = to.get(pointKey(first));
+      const b = to.get(pointKey(last));
+      if (!held) {
+        // Both ends moved, so a wire with nothing else on it keeps its shape if it can.
+        const dx = a!.x - first.x;
+        const dy = a!.y - first.y;
+        wire.points = dx === b!.x - last.x && dy === b!.y - last.y
+          ? original.map((p) => ({ x: p.x + dx, y: p.y + dy }))
+          : (careful ? this.doc.clearRoute(a!, b!) : undefined) ?? route(a!, b!);
+        continue;
+      }
+      const head = held.head ? lead(a!, held.head, held.headOnRun) : [];
+      const tail = held.tail ? lead(b!, held.tail, held.tailOnRun).reverse() : [];
+      wire.points = simplify([...head, ...held.middle, ...tail]);
+    }
+    for (const item of this.leads) {
+      const at = to.get(pointKey(item.from))!;
+      item.wire.points = (careful ? this.doc.clearRoute(at, item.from) : undefined) ?? route(at, item.from);
+      if (!item.added) {
+        this.doc.schematic.wires.push(item.wire);
+        item.added = true;
+      }
+    }
+  }
+
+  /** Whether the connections and net names match how they began. Clears away wires that have shrunk to nothing. */
+  connectionsKept(): boolean {
+    const s = this.doc.schematic;
+    if (connectivitySignature(s, true) !== this.before) return false;
+    const shrunk = new Set([...this.following.map((f) => f.wire), ...this.leads.map((l) => l.wire)].filter((w) => simplify(w.points).length < 2));
+    if (shrunk.size) s.wires = s.wires.filter((w) => !shrunk.has(w));
+    return true;
+  }
+
+  /** Ends a drag. Bending can land on another wire or pin, so that reroutes cleanly before giving up. */
+  settle(): boolean {
+    if (this.connectionsKept()) return true;
+    this.follow(true);
+    return this.connectionsKept();
   }
 }
 
@@ -444,6 +904,30 @@ export function route(from: Point, to: Point): Point[] {
   return [from, { x: to.x, y: from.y }, to];
 }
 
+/**
+ * For two ends in line with pins between them, when the far end can only be reached along that
+ * line, as where it tees into a wire: step aside, pass them, and come back onto the line.
+ */
+function sidesteps(from: Point, to: Point, pins: Point[]): Point[][] {
+  const upright = from.x === to.x;
+  const paths: Point[][] = [];
+  if (!upright && from.y !== to.y) return paths;
+  const along = (p: Point) => (upright ? p.y : p.x);
+  const inLine = pins.filter((p) => (upright ? p.x === to.x : p.y === to.y) && !same(p, from) && !same(p, to) && onSeg(p, from, to));
+  // Back onto the line halfway from the far end to the nearest of them, as that gap can be short.
+  const gap = Math.min(...inLine.map((p) => Math.abs(along(p) - along(to))));
+  if (!Number.isFinite(gap)) return paths;
+  const on = along(to) + Math.sign(along(from) - along(to)) * Math.round(gap / 2);
+  for (let d = 20; d <= 200; d += 20) {
+    for (const aside of [d, -d]) {
+      paths.push(upright
+        ? [from, { x: from.x + aside, y: from.y }, { x: from.x + aside, y: on }, { x: to.x, y: on }, to]
+        : [from, { x: from.x, y: from.y + aside }, { x: on, y: from.y + aside }, { x: on, y: to.y }, to]);
+    }
+  }
+  return paths;
+}
+
 const same = (a: Point, b: Point) => a.x === b.x && a.y === b.y;
 
 function onSeg(p: Point, a: Point, b: Point): boolean {
@@ -486,14 +970,16 @@ function isClear(path: Point[], from: Point, to: Point, pins: Point[], wires: Po
   return true;
 }
 
-/** Drops repeated and collinear points. */
+/** Drops repeated points, and those in the middle of a straight run. */
 export function simplify(points: Point[]): Point[] {
   const out: Point[] = [];
   for (const p of points) {
     const last = out[out.length - 1];
     if (last && last.x === p.x && last.y === p.y) continue;
     const prev = out[out.length - 2];
-    if (prev && last && ((prev.x === last.x && last.x === p.x) || (prev.y === last.y && last.y === p.y))) {
+    // A wire doubling back still covers the far spot, and something may be joined there.
+    const onward = prev && last && (last.x - prev.x) * (p.x - last.x) + (last.y - prev.y) * (p.y - last.y) > 0;
+    if (onward && ((prev.x === last.x && last.x === p.x) || (prev.y === last.y && last.y === p.y))) {
       out[out.length - 1] = p;
     } else {
       out.push({ x: p.x, y: p.y });

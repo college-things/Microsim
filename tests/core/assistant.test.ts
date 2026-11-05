@@ -1,6 +1,6 @@
 // Drives the assistant loop against a scripted API, since live calls need a key and cost money.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Assistant } from "../../src/agent/assistant";
+import { Assistant, explainError, Stopped } from "../../src/agent/assistant";
 import { runTool, summarize, TOOL_SPECS } from "../../src/agent/tools";
 import { Doc } from "../../src/core/doc";
 import { simulate } from "../../src/engine/index";
@@ -118,6 +118,53 @@ describe("assistant loop", () => {
     expect(result.content).toContain("No component named R9");
   });
 
+  it("leaves no undo step, and the redo history alone, when its only edit was refused", async () => {
+    const doc = new Doc();
+    doc.addPart("resistor", 0, 0);
+    doc.addPart("resistor", 300, 0);
+    doc.checkpoint();
+    doc.addPart("capacitor", 0, 200);
+    doc.undo();
+    doc.dirty = false;
+    const before = JSON.stringify(doc.schematic);
+    const schematic = doc.schematic;
+    // Landing R1's pin on R2's would connect them, so the move is refused.
+    script.push(
+      { stop_reason: "tool_use", content: [toolUse("x", "move_component", { ref: "R1", x: 240, y: 0 })] },
+      { stop_reason: "end_turn", content: [] },
+    );
+    await new Assistant(doc, run, () => "k").send("move R1", events());
+    expect(requests[1].messages.at(-1).content[0].is_error).toBe(true);
+    expect(doc.schematic).toBe(schematic);
+    expect(JSON.stringify(doc.schematic)).toBe(before);
+    expect(doc.dirty).toBe(false);
+    doc.redo();
+    expect(doc.schematic.components.map((c) => c.kind)).toEqual(["resistor", "resistor", "capacitor"]);
+    doc.undo();
+    doc.undo();
+    expect(doc.schematic.components.map((c) => c.kind)).toEqual(["resistor", "resistor"]);
+  });
+
+  it("makes one undo step of a turn whose first edit was refused and whose next one wasn't", async () => {
+    const doc = new Doc();
+    doc.addPart("resistor", 0, 0);
+    doc.addPart("resistor", 300, 0);
+    const before = JSON.stringify(doc.schematic);
+    script.push(
+      { stop_reason: "tool_use", content: [
+        toolUse("x", "move_component", { ref: "R1", x: 240, y: 0 }),
+        toolUse("y", "add_component", { kind: "capacitor", x: 0, y: 200 }),
+        toolUse("z", "add_component", { kind: "capacitor", x: 100, y: 200 }),
+      ] },
+      { stop_reason: "end_turn", content: [] },
+    );
+    await new Assistant(doc, run, () => "k").send("go on", events());
+    expect(doc.schematic.components).toHaveLength(4);
+    expect(doc.dirty).toBe(true);
+    doc.undo();
+    expect(JSON.stringify(doc.schematic)).toBe(before);
+  });
+
   it("rejects incomplete tool input without running the tool", async () => {
     const doc = new Doc();
     script.push(
@@ -171,7 +218,7 @@ describe("assistant loop", () => {
     await expect(assistant.send("three", events())).resolves.toBeUndefined();
   });
 
-  it("stops between tool calls and cancels a running simulation", async () => {
+  it("stops between tool calls, leaving a simulation it didn't start alone", async () => {
     let cancelled = 0;
     const doc = new Doc();
     const assistant = new Assistant(doc, run, () => "k", () => { cancelled++; });
@@ -183,12 +230,87 @@ describe("assistant loop", () => {
       ...events(),
       onTool() { assistant.stop(); },
     };
-    await expect(assistant.send("add", log)).rejects.toThrow();
-    expect(cancelled).toBe(1);
+    await expect(assistant.send("add", log)).rejects.toBeInstanceOf(Stopped);
+    expect(cancelled).toBe(0);
     expect(doc.schematic.components).toHaveLength(1);
     const results = (assistant as any).history.at(-1).content;
     expect(results.map((r: any) => r.tool_use_id)).toEqual(["a", "b"]);
     expect(results[1].is_error).toBe(true);
+  });
+
+  it("cancels a simulation that a tool started", async () => {
+    let cancelled = 0;
+    let startedSimulation = () => {};
+    const simulating = new Promise<void>((resolve) => { startedSimulation = resolve; });
+    let failSimulation = (_: Error) => {};
+    const slow = () => {
+      startedSimulation();
+      return new Promise<never>((_, reject) => { failSimulation = reject; });
+    };
+    const assistant = new Assistant(new Doc(), slow, () => "k", () => { cancelled++; failSimulation(new Error("Simulation stopped.")); });
+    script.push({ stop_reason: "tool_use", content: [toolUse("a", "run_analysis", { type: "op" })] });
+    const log = events();
+    const sending = assistant.send("simulate", log);
+    await simulating;
+    assistant.stop();
+    await expect(sending).rejects.toBeInstanceOf(Stopped);
+    expect(cancelled).toBe(1);
+    expect(log.tools).toEqual(["Ran op analysis"]);
+  });
+
+  it("drops a run when a new chat starts", async () => {
+    const doc = new Doc();
+    let assistant = new Assistant(doc, run, () => "k");
+    script.push({
+      stop_reason: "tool_use",
+      content: [toolUse("a", "add_component", { kind: "resistor", x: 0, y: 0 }), toolUse("b", "add_component", { kind: "resistor", x: 200, y: 0 })],
+    }, { stop_reason: "end_turn", content: [{ type: "text", text: "from the old run" }] });
+    const text: string[] = [];
+    const tools: string[] = [];
+    const log = {
+      onText: (t: string) => text.push(t),
+      onTool(t: string) { tools.push(t); assistant.reset(); },
+    };
+    // It ends quietly, having reported nothing more and made no further request or change.
+    await expect(assistant.send("add", log)).resolves.toBeUndefined();
+    expect(tools).toHaveLength(1);
+    expect(text).toEqual([]);
+    expect(doc.schematic.components).toHaveLength(1);
+    expect(requests).toHaveLength(1);
+
+    script.length = 0;
+    script.push({ stop_reason: "end_turn", content: [{ type: "text", text: "fresh" }] });
+    await assistant.send("next", events());
+    expect(requests.at(-1).messages).toEqual([{ role: "user", content: "next" }]);
+  });
+
+  it("makes no request for a run stopped before it began", async () => {
+    const assistant = new Assistant(new Doc(), run, () => "k");
+    const sending = assistant.send("hello", events());
+    assistant.stop();
+    await expect(sending).rejects.toBeInstanceOf(Stopped);
+    expect(requests).toHaveLength(0);
+    expect((assistant as any).history).toEqual([]);
+  });
+
+  it("explains failures in plain words", () => {
+    const api = (status: number | undefined, type: string, message: string) => Object.assign(new Error(`${status} {"type":"error"}`), {
+      status, type, error: { type: "error", error: { type, message } },
+    });
+    expect(explainError(api(401, "authentication_error", "invalid x-api-key"))).toMatch(/API key.*Settings/);
+    expect(explainError(api(403, "permission_error", "no"))).toMatch(/Settings/);
+    expect(explainError(api(429, "rate_limit_error", "slow"))).toMatch(/rate limit/);
+    expect(explainError(api(529, "overloaded_error", "busy"))).toMatch(/overloaded/);
+    expect(explainError(api(500, "api_error", "oops"))).toMatch(/try again/i);
+    // A failure partway through a reply has no status.
+    expect(explainError(api(undefined, "overloaded_error", "busy"))).toMatch(/overloaded/);
+    expect(explainError(api(400, "invalid_request_error", "Your credit balance is too low."))).toBe("Anthropic refused the request: Your credit balance is too low.");
+    expect(explainError(new Error("Connection error."))).toMatch(/Couldn't reach Anthropic/);
+    expect(explainError(new Error("Request timed out."))).toMatch(/Couldn't reach Anthropic/);
+    expect(explainError(new Error("stream ended without producing a Message with role=assistant"))).toBe("The reply was cut off. Try again.");
+    for (const status of [401, 403, 402, 413, 429, 529, 500, 400, 418]) {
+      expect(explainError(api(status, "x", "y"))).not.toContain("{");
+    }
   });
 
   it("does not use a credential from the environment", async () => {

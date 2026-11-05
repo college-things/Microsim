@@ -1,4 +1,4 @@
-// Imports a circuit file into Ohmlet's document model. See docs/ms14-format.md for the format.
+// Imports a circuit file into Microsim's document model. See docs/ms14-format.md for the format.
 import type { AnalysisRequest } from "../core/sim";
 import type {
   FreeText,
@@ -14,6 +14,9 @@ import type {
 import { pinWorld } from "../core/netlist";
 import { bindConnectivity, type FileNets, Geometry, geometryOf } from "./connectivity";
 import { decodeContainer } from "./container";
+import { parseCircuit } from "../core/file";
+import { buildNetlist } from "../core/netlist";
+import { decodeEditorExtension } from "./extension";
 import {
   apply,
   multiply,
@@ -37,6 +40,7 @@ import { displayText, normalizeStoredValue, singleLine } from "./values";
 import { bytesToText, child, kids, parseXml, path, textValue, walk, type XmlNode } from "./xml";
 
 export { decodeContainer } from "./container";
+import { convertNiMcus } from "./mcu";
 
 const MAX_DEPTH = 16;
 const MAX_COMPONENTS = 200_000;
@@ -84,6 +88,7 @@ interface ModelEntry {
 }
 
 interface Context {
+  retainSource: boolean;
   sheetsByTitle: Map<string, Sheet>;
   /** Reference shown on the sheet, by sheet title and stored name. See loadReferenceNames. */
   shownRefs: Map<string, string>;
@@ -312,7 +317,7 @@ function labelsFor(template: string, params: Record<string, string>, spice: stri
 
 interface InstrumentPlan {
   kind?: InstrumentKind;
-  /** Stored pin name to Ohmlet pin name. */
+  /** Stored pin name to Microsim pin name. */
   pins?: Record<string, string>;
 }
 
@@ -848,7 +853,7 @@ function flattenSheet(ctx: Context, sheet: Sheet, suffix: string, parentNets: Ma
       if (plan.kind === "function-generator") {
         const negative = pins.find((p) => p.name === "neg");
         if (negative?.net !== undefined) {
-          ctx.issues.push({ severity: "info", refDes, message: "Instrument: function generator uses its negative terminal, so it is imported as its stored SPICE model rather than as an Ohmlet instrument." });
+          ctx.issues.push({ severity: "info", refDes, message: "Instrument: function generator uses its negative terminal, so it is imported as its stored SPICE model rather than as an Microsim instrument." });
         } else {
           instrument = plan.kind;
           params.shape = { "0": "sine", "1": "triangle", "2": "square" }[props.WAVE_MODE ?? "0"] ?? "sine";
@@ -875,10 +880,10 @@ function flattenSheet(ctx: Context, sheet: Sheet, suffix: string, parentNets: Ma
       } else if (plan.kind) {
         instrument = plan.kind;
       } else if (spice) {
-        ctx.issues.push({ severity: "info", refDes, message: `Instrument: ${identity[3] || localName} has no Ohmlet equivalent; it is imported as its stored SPICE model, which keeps the circuit intact.` });
+        ctx.issues.push({ severity: "info", refDes, message: `Instrument: ${identity[3] || localName} has no Microsim equivalent; it is imported as its stored SPICE model, which keeps the circuit intact.` });
       } else {
         instrument = "unsupported";
-        ctx.issues.push({ severity: "warning", refDes, message: `Instrument: ${identity[3] || localName} has no Ohmlet equivalent and does not take part in the simulation.` });
+        ctx.issues.push({ severity: "warning", refDes, message: `Instrument: ${identity[3] || localName} has no Microsim equivalent and does not take part in the simulation.` });
       }
     }
 
@@ -921,6 +926,7 @@ function flattenSheet(ctx: Context, sheet: Sheet, suffix: string, parentNets: Ma
       pins,
       spice,
     };
+    if (ctx.retainSource) component.nativeMs14 = { sheet: sheet.title, component: item.attrs.CiID, symbol: node.attrs.SymCompID ?? "" };
     if (graphics.length) component.graphics = graphics;
     if (displayValue) component.displayValue = displayValue;
     if (instrument) component.instrument = instrument;
@@ -1357,16 +1363,16 @@ const OBJECT_NOTES: Record<string, string> = {
 };
 
 /** Imports a circuit file. Throws an Error on corrupt input; everything else becomes an issue. */
-export function importMs14(bytes: Uint8Array): ImportResult {
-  return importDetailed(bytes).result;
+export function importMs14(bytes: Uint8Array, options: { retainSource?: boolean } = {}): ImportResult {
+  return importDetailed(bytes, options).result;
 }
 
 const OWN_ERROR = /^(Corrupt circuit file|Not a Multisim circuit file|Circuit is too large)/;
 
 /** Any failure comes back as a clear message, whatever a damaged file manages to break. */
-export function importDetailed(bytes: Uint8Array): { result: ImportResult; fileNets: FileNets } {
+export function importDetailed(bytes: Uint8Array, options: { retainSource?: boolean } = {}): { result: ImportResult; fileNets: FileNets } {
   try {
-    return importUnchecked(bytes);
+    return importUnchecked(bytes, !!options.retainSource);
   } catch (error) {
     if (error instanceof Error && OWN_ERROR.test(error.message)) throw error;
     throw new Error(`Corrupt circuit file: its contents could not be read (${error instanceof Error ? error.message : String(error)}).`);
@@ -1374,15 +1380,24 @@ export function importDetailed(bytes: Uint8Array): { result: ImportResult; fileN
 }
 
 /** The import along with the nets the file states, which the result no longer spells out on most pins. */
-function importUnchecked(bytes: Uint8Array): { result: ImportResult; fileNets: FileNets } {
+function importUnchecked(bytes: Uint8Array, retainSource: boolean): { result: ImportResult; fileNets: FileNets } {
   const xmlBytes = decodeContainer(bytes);
   const root = parseXml(bytesToText(xmlBytes));
   if (root.tag !== "MSMElectronicsWorkbench") throw new Error(`Not a Multisim circuit file: root element is <${root.tag}>.`);
   const project = child(root, "Project");
   if (!project) throw new Error("Corrupt circuit file: no project element.");
 
+  const own = child(project, "MicrosimDocument");
+  const editorExtension = decodeEditorExtension(bytesToText(xmlBytes));
+  if (own || project.attrs.MicrosimDocument || editorExtension) {
+    if (!editorExtension && (own?.attrs.Version ?? project.attrs.MicrosimVersion) !== "1") throw new Error("Corrupt circuit file: unsupported Microsim extension.");
+    const file = parseCircuit(editorExtension ?? textValue(own?.attrs.Data ?? project.attrs.MicrosimDocument));
+    return { result: { ...file, format: { schema: root.attrs.Schema ?? "67", application: "Microsim", version: "14.0" } }, fileNets: buildNetlist(file.schematic).pinNets };
+  }
+
   const issues: ImportIssue[] = [];
   const ctx: Context = {
+    retainSource,
     sheetsByTitle: new Map(),
     shownRefs: loadReferenceNames(project),
     heldPins: new Set(),
@@ -1525,9 +1540,13 @@ function importUnchecked(bytes: Uint8Array): { result: ImportResult; fileNets: F
   const fixedText = components.filter((c) => c.spice && !c.spice.includes("{ref}")).length;
   if (fixedText) issues.push({ severity: "info", message: `Template: ${fixedText} part(s) hold SPICE text with fixed device and net names, so a second copy on the sheet would clash with the first.` });
 
+  const xmlText = bytesToText(xmlBytes);
+  convertNiMcus(components, xmlText, issues);
+  const schematic = { name, components, wires, labels, texts, definitions: definitionLines.join("\n") };
+  if (retainSource) Object.assign(schematic, { nativeMs14: { xml: xmlText, baseline: JSON.stringify(schematic) } });
   return {
     result: {
-      schematic: { name, components, wires, labels, texts, definitions: definitionLines.join("\n") },
+      schematic,
       analyses,
       issues,
       format,

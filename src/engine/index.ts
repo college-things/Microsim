@@ -1,4 +1,4 @@
-// Ohmlet simulation engine entry point. Synchronous and free of DOM and Node APIs,
+// Microsim simulation engine entry point. Synchronous and free of DOM and Node APIs,
 // so it can run inside a Web Worker.
 
 import { SimError, type AnalysisRequest, type LiveChunk, type LiveSession, type SimOptions, type SimResult } from "../core/sim";
@@ -63,6 +63,12 @@ export function createLiveSession(netlist: string, options: { tmax?: number; uic
       },
       get time(): number {
         return analysis.liveTime(run);
+      },
+      send(device: string, bytes: number[]): boolean {
+        const input = circuit.serialInputs.get(device.toLowerCase());
+        if (!input) return false;
+        input.send(bytes.map((b) => b & 255));
+        return true;
       },
       advance(untilTime: number, budgetMs: number): LiveChunk {
         if (!(untilTime >= 0) || !Number.isFinite(untilTime)) {

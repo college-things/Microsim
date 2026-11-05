@@ -1,5 +1,5 @@
 // Built-in parts. Symbols and generic device models are original to this project.
-import type { Graphic, InstrumentKind, Pin } from "./schematic";
+import type { Graphic, IndicatorSpec, InstrumentKind, Pin } from "./schematic";
 
 export interface ParamDef {
   key: string;
@@ -26,6 +26,7 @@ export interface PartDef {
   /** Param shown beside the symbol. */
   valueParam?: string;
   instrument?: InstrumentKind;
+  indicator?: IndicatorSpec;
 }
 
 const line = (...c: number[]): Graphic => {
@@ -346,6 +347,71 @@ export const PARTS: PartDef[] = [
     params: [], spice: "", instrument: "logic-analyzer",
     graphics: [...instrumentBox("LOGIC", 64, 40), ...[0, 1, 2, 3].map((i) => line(-24 + i * 16, 20, -24 + i * 16, 30))],
   },
+  {
+    kind: "serial-terminal", name: "Serial terminal", category: "Instruments", prefix: "XST",
+    pins: [{ name: "RX", x: -10, y: 25, optional: true }, { name: "TX", x: 10, y: 25, optional: true }],
+    params: [
+      { key: "baud", label: "Baud rate", default: "9600" },
+      { key: "parity", label: "Parity", default: "none", options: ["none", "even", "odd"] },
+      { key: "threshold", label: "Logic threshold (V)", default: "2.5" },
+    ],
+    spice: "", instrument: "serial-terminal",
+    graphics: [...instrumentBox("UART", 48, 34), line(-10, 17, -10, 25), line(10, 17, 10, 25), text(-10, 9, "RX", 6), text(10, 9, "TX", 6)],
+  },
 ];
 
+// Original process models. Signal voltages are engineering units, referred to GND.
+PARTS.push({
+  kind: "holding-tank", name: "Holding tank", category: "Analog", prefix: "XTANK",
+  pins: [{ name: "FILL", x: -50, y: -20 }, { name: "DRAIN", x: -50, y: 20 }, { name: "LEVEL", x: 50, y: -20 }, { name: "FULL", x: 50, y: 20 }, { name: "GND", x: 0, y: 50, net: "0" }],
+  params: [{ key: "capacity", label: "Capacity (litres)", default: "100" }, { key: "rate", label: "Flow per volt (L/s/V)", default: "1" }],
+  spice: `X{ref} {pin:FILL} {pin:DRAIN} {pin:LEVEL} {pin:FULL} {pin:GND} MS_TANK capacity={param:capacity} rate={param:rate}`,
+  definitions: `.subckt MS_TANK fill drain level full g params: capacity=100 rate=1
+Cstate state g 1 IC=0
+Rleak state g 1e9
+Bflow g state I={if(time>0,max(0,v(fill,g))*rate*limit((capacity-v(state,g))/0.001,0,1)-max(0,v(drain,g))*rate*limit(v(state,g)/0.001,0,1),0)}
+Rlevel level rawlevel 1
+Blevel rawlevel g V={limit(v(state,g),0,capacity)}
+Rfull full rawfull 1
+Bfull rawfull g V={if(v(state,g)>=capacity*0.99,5,0)}
+.ends MS_TANK`,
+  graphics: [rect(-35, -30, 70, 65), text(0, -10, "TANK"), text(0, 10, "L"), line(-50, -20, -35, -20), line(-50, 20, -35, 20), line(35, -20, 50, -20), line(35, 20, 50, 20), line(0, 35, 0, 50)],
+  indicator: { kind: "voltmeter", pins: ["LEVEL", "GND"], reads: "voltage", mode: "dc" },
+}, {
+  kind: "conveyor", name: "Conveyor belt", category: "Analog", prefix: "XBELT",
+  pins: [{ name: "SPEED", x: -60, y: -10 }, { name: "ENABLE", x: -60, y: 20 }, { name: "POSITION", x: 60, y: -10 }, { name: "SENSOR", x: 60, y: 20 }, { name: "GND", x: 0, y: 45, net: "0" }],
+  params: [{ key: "length", label: "Belt length (m)", default: "10" }, { key: "gain", label: "Speed (m/s/V)", default: "1" }, { key: "sensor", label: "Sensor position (m)", default: "5" }],
+  spice: `X{ref} {pin:SPEED} {pin:ENABLE} {pin:POSITION} {pin:SENSOR} {pin:GND} MS_BELT length={param:length} gain={param:gain} sensor={param:sensor}`,
+  definitions: `.subckt MS_BELT speed enable position sensorout g params: length=10 gain=1 sensor=5
+Cdistance distance g 1 IC=0
+Rleak distance g 1e9
+Bmotion g distance I={if(time>0,if(v(enable,g)>2.5,max(0,v(speed,g))*gain,0),0)}
+Rposition position rawposition 1
+Bposition rawposition g V={v(distance,g)-floor(v(distance,g)/max(length,0.001))*max(length,0.001)}
+Rsensor sensorout rawsensor 1
+Bsensor rawsensor g V={if(abs(v(position,g)-sensor)<0.1,5,0)}
+.ends MS_BELT`,
+  graphics: [rect(-45, -25, 90, 55), circle(-30, 0, 10), circle(30, 0, 10), line(-30, -10, 30, -10), line(-30, 10, 30, 10), line(-60, -10, -45, -10), line(-60, 20, -45, 20), line(45, -10, 60, -10), line(45, 20, 60, 20), line(0, 30, 0, 45)],
+  indicator: { kind: "voltmeter", pins: ["POSITION", "GND"], reads: "voltage", mode: "dc" },
+});
+for (const [kind, name, base] of [
+  ["agilent-multimeter", "Agilent style multimeter", "multimeter"],
+  ["tektronix-scope", "Tektronix style oscilloscope", "oscilloscope"],
+] as const) {
+  const p = PARTS.find((part) => part.kind === base)!;
+  const variant={ ...structuredClone(p), kind, name };
+  if(kind==='tektronix-scope'){
+    variant.pins.push({name:'C',x:-15,y:-30},{name:'D',x:15,y:-30});
+    variant.graphics.push(line(-15,-20,-15,-30),line(15,-20,15,-30),text(-15,-16,'C',7),text(15,-16,'D',7));
+  }
+  PARTS.push(variant);
+}
+PARTS.push({
+  kind:'mcu8051',name:'8051 firmware core',category:'Digital',prefix:'U',
+  pins:[...Array.from({length:32},(_,i)=>({name:`P${i>>>3}.${i&7}`,x:i<16?-90:90,y:(i%16)*15-112.5,optional:true})),{name:'RST',x:0,y:145}],
+  params:[{key:'frequency',label:'Oscillator (Hz, classic 12 clocks/cycle)',default:'12Meg'},{key:'code',label:'Program bytes (hex)',default:'020000',text:true}],
+  spice:`a{ref} [${Array.from({length:32},(_,i)=>`{pin:P${i>>>3}.${i&7}}`).join(' ')}] {pin:RST} MCU_{ref}\n.model MCU_{ref} d_mcu8051(program="{param:code}" frequency={param:frequency})`,
+  graphics:[rect(-70,-130,140,260),text(-25,-140,'8051'),...Array.from({length:32},(_,i)=>[line(i<16?-90:70,(i%16)*15-112.5,i<16?-70:90,(i%16)*15-112.5),text(i<16?-65:38,(i%16)*15-109,`P${i>>>3}.${i&7}`,8)]).flat(),line(0,130,0,145),text(-10,125,'RST',8)],
+  valueParam:'frequency',
+});
 export const PART_BY_KIND = new Map(PARTS.map((p) => [p.kind, p]));

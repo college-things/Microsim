@@ -134,6 +134,25 @@ export function findVector(result: SimResult, name: string): SimVector | undefin
   return result.vectors.find((v) => v.name.toLowerCase() === wanted);
 }
 
+/** Below this share of the strongest signal of its kind, an AC value is the solver's rounding, not a signal. */
+const AC_RESIDUE = 1e-13;
+
+/** Each vector of an AC result in dB, with NaN where it holds no signal, which no plot should draw down to. */
+export function acDecibels(result: SimResult): Map<string, Float64Array> {
+  const magnitudes = result.vectors.map((v) => Float64Array.from(v.re, (re, i) => Math.hypot(re, v.im?.[i] ?? 0)));
+  const strongest = new Map<string, number>();
+  result.vectors.forEach((v, n) => strongest.set(v.unit, magnitudes[n].reduce((peak, m) => Math.max(peak, m), strongest.get(v.unit) ?? 0)));
+  return new Map(result.vectors.map((v, n) => {
+    const floor = strongest.get(v.unit)! * AC_RESIDUE;
+    return [v.name, magnitudes[n].map((m) => (m > floor ? 20 * Math.log10(m) : NaN))];
+  }));
+}
+
+/** The vectors of an AC result that hold a signal anywhere in the sweep. */
+export function acSignals(result: SimResult): Set<string> {
+  return new Set([...acDecibels(result)].filter(([, db]) => db.some((value) => !Number.isNaN(value))).map(([name]) => name));
+}
+
 export function rms(values: ArrayLike<number>, time: ArrayLike<number>): number {
   let sum = 0;
   for (let i = 1; i < values.length; i++) {
@@ -149,8 +168,9 @@ export function rms(values: ArrayLike<number>, time: ArrayLike<number>): number 
  * The samples a meter should read. A signal that is repeating right now is read across its
  * last few whole periods, so a partial period can't skew the result. Anything else is read
  * from the newest `fallback` part of the samples, so the reading follows the circuit.
+ * A span of whole periods also gives the level it crosses at each end, between two samples.
  */
-export function settledSpan(values: ArrayLike<number>, time: ArrayLike<number>, fallback = 0.02, noPeriods = fallback): [number, number] {
+export function settledSpan(values: ArrayLike<number>, time: ArrayLike<number>, fallback = 0.02, noPeriods = fallback): [number, number, number?] {
   const lastIndex = time.length - 1;
   const newest = (share: number): [number, number] => {
     const recent = time[lastIndex] - (time[lastIndex] - time[0]) * share;
@@ -184,35 +204,62 @@ export function settledSpan(values: ArrayLike<number>, time: ArrayLike<number>, 
   const ended = time[lastIndex] - time[used[used.length - 1]];
   // Irregular crossings are chatter, and old ones mean the signal has since stopped.
   if (longest > shortest * 2 || ended > longest * 2) return newest(fallback);
-  return [used[0], used[used.length - 1]];
+  return [used[0], used[used.length - 1], center];
 }
+
+/**
+ * Time-weighted mean and mean square over a span from settledSpan. A span of whole periods is cut
+ * at the crossings themselves, since a window ending on a sample is off by part of a step. Between
+ * samples a signal follows a parabola where the bend agrees on both sides of the step, because
+ * straight lines read a sine low. Anywhere else, like a ramp or an edge, straight lines are right.
+ */
+function settledMoments(values: ArrayLike<number>, time: ArrayLike<number>, [first, last, level]: [number, number, number?]): { span: number; mean: number; square: number; peak: number } {
+  const bend = (i: number) => {
+    if (i < 1 || i >= time.length - 1) return 0;
+    return ((values[i + 1] - values[i]) / (time[i + 1] - time[i]) - (values[i] - values[i - 1]) / (time[i] - time[i - 1])) / (time[i + 1] - time[i - 1]);
+  };
+  let span = 0, mean = 0, square = 0, peak = 0;
+  // Over the step from sample i - 1 to sample i.
+  const add = (i: number, a: number, b: number, dt: number) => {
+    const before = bend(i - 1), after = bend(i);
+    const agree = before * after > 0 && Math.abs(before) < 2 * Math.abs(after) && Math.abs(after) < 2 * Math.abs(before);
+    const c = agree ? (before + after) / 2 : 0;
+    const dt3 = dt * dt * dt;
+    span += dt;
+    mean += ((a + b) / 2) * dt - (c * dt3) / 6;
+    square += ((a * a + a * b + b * b) / 3) * dt - (c * dt3 * (a + b)) / 6 + (c * c * dt3 * dt * dt) / 30;
+    peak = Math.max(peak, Math.abs(a), Math.abs(b));
+  };
+  // Samples first and last are each the first one past a crossing of the level.
+  const crossing = (i: number) => (level! - values[i - 1]) / (values[i] - values[i - 1]);
+  if (level !== undefined) {
+    add(first, level, values[first], (time[first] - time[first - 1]) * (1 - crossing(first)));
+    add(last, values[last - 1], level, (time[last] - time[last - 1]) * crossing(last));
+  }
+  const end = level === undefined ? last : last - 1;
+  for (let i = first + 1; i <= end; i++) add(i, values[i - 1], values[i], time[i] - time[i - 1]);
+  return span > 0 ? { span, mean: mean / span, square: square / span, peak } : { span, mean: 0, square: 0, peak };
+}
+
+/** Below this share of its signal, a mean is solver residue and not a reading. */
+const RESIDUE = 1e-7;
 
 /** Time average over the settled samples, which is what a DC meter shows. */
 export function settledMean(values: ArrayLike<number>, time: ArrayLike<number>): number {
-  const [first, last] = settledSpan(values, time);
-  let span = 0, sum = 0;
-  for (let i = first + 1; i <= last; i++) {
-    const dt = time[i] - time[i - 1];
-    sum += ((values[i - 1] + values[i]) / 2) * dt;
-    span += dt;
-  }
-  return span > 0 ? sum / span : values[values.length - 1] ?? 0;
+  const { span, mean, peak } = settledMoments(values, time, settledSpan(values, time));
+  if (span <= 0) return values[values.length - 1] ?? 0;
+  return Math.abs(mean) < RESIDUE * peak ? 0 : mean;
 }
 
 /** RMS over the settled samples with the mean removed. */
 export function acRms(values: ArrayLike<number>, time: ArrayLike<number>): number {
   // With no periods yet, as on a slow signal just starting, more of the window is the better guess.
-  const [first, last] = settledSpan(values, time, 0.02, 0.25);
-  let span = 0, mean = 0, square = 0;
-  for (let i = first + 1; i <= last; i++) {
-    const dt = time[i] - time[i - 1];
-    const a = values[i - 1];
-    const b = values[i];
-    span += dt;
-    mean += ((a + b) / 2) * dt;
-    square += ((a * a + a * b + b * b) / 3) * dt;
-  }
-  if (span <= 0) return 0;
-  mean /= span;
-  return Math.sqrt(Math.max(0, square / span - mean * mean));
+  const { span, mean, square } = settledMoments(values, time, settledSpan(values, time, 0.02, 0.25));
+  return span > 0 ? Math.sqrt(Math.max(0, square - mean * mean)) : 0;
+}
+
+/** RMS including any DC, over whole periods when the signal repeats and otherwise all of it. */
+export function settledRms(values: ArrayLike<number>, time: ArrayLike<number>): number {
+  const { span, square } = settledMoments(values, time, settledSpan(values, time, 1));
+  return span > 0 ? Math.sqrt(square) : Math.abs(values[0] ?? 0);
 }

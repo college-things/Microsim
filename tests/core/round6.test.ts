@@ -174,7 +174,7 @@ describe("assistant input checks", () => {
   });
 });
 
-describe("parts Ohmlet doesn't simulate", () => {
+describe("parts Microsim doesn't simulate", () => {
   const part = (refDes: string, spice: string) => ({
     id: refDes, refDes, kind: "imported", x: 0, y: 0, rotation: 0 as const, mirrored: false, params: {}, pins: [], spice,
   });

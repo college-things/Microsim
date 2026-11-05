@@ -9,6 +9,8 @@ import { LU_NONFINITE, LU_OK, LU_SINGULAR, SparseLU } from "./sparse";
 const GMIN_START = 1e-2;
 const SOURCE_STEP_MIN = 1e-6;
 const RESCUE_GSHUNT = 1e-9;
+/** The share of a node's conductance GMIN may be before its voltage is noticeably off. */
+const GMIN_SHARE = 1e-3;
 /** Limits that make an unreasonable run fail in bounded time instead of hanging the worker. */
 const MAX_SWEEP_POINTS = 10_000_000;
 /** A transient stops here and returns what it has, so a very long stored run still gives results. */
@@ -100,6 +102,8 @@ export class Collector {
   private readonly maxSamples: number;
   private stride = 1;
   private skipped = 0;
+  private gap = 1;
+  private scatter = 0;
   private lastAxis = NaN;
   private lastX: Float64Array | null = null;
   decimated = false;
@@ -118,9 +122,21 @@ export class Collector {
     this.dataIm = complex ? specs.map(() => new Float64Array(this.cap)) : [];
   }
 
+  /** Goes around 0 to 1 without settling into a pattern, so what's kept doesn't either. */
+  private nextScatter(): number {
+    this.scatter = (this.scatter + 0.6180339887498949) % 1;
+    return this.scatter;
+  }
+
+  /**
+   * Halves what's stored, by keeping either point of each pair. A fixed pattern could land on the
+   * same part of every period of a steady waveform, and plot it as a flat line.
+   */
   private decimate(): void {
+    const picks = new Int32Array((this.count + 1) >> 1);
+    for (let k = 1; k < picks.length; k++) picks[k] = Math.min(2 * k + (this.nextScatter() < 0.5 ? 0 : 1), this.count - 1);
     const keep = (a: Float64Array): void => {
-      for (let i = 0; i < this.count; i += 2) a[i >> 1] = a[i]!;
+      for (let k = 0; k < picks.length; k++) a[k] = a[picks[k]!]!;
     };
     keep(this.axis);
     for (const d of this.data) keep(d);
@@ -150,13 +166,14 @@ export class Collector {
 
   push(axis: number, x: Float64Array, xIm?: Float64Array): void {
     if (this.stride > 1) {
-      if (++this.skipped < this.stride) {
+      if (++this.skipped < this.gap) {
         this.lastAxis = axis;
         if (!this.lastX) this.lastX = new Float64Array(x.length);
         this.lastX.set(x);
         return;
       }
       this.skipped = 0;
+      this.gap = 1 + Math.floor(this.nextScatter() * (2 * this.stride - 1));
     }
     this.store(axis, x, xIm);
   }
@@ -246,7 +263,7 @@ export class Analysis {
     c.rhs[0] = 0;
     const g = c.gmin + this.gshunt;
     if (g !== 0) {
-      const slots = c.gminSlots;
+      const slots = this.gshunt !== 0 ? c.nodeSlots : c.gminSlots;
       const v = c.vals;
       for (let i = 0; i < slots.length; i++) v[slots[i]!]! += g;
     }
@@ -485,6 +502,24 @@ export class Analysis {
     for (let i = 0; i < this.acceptList.length; i++) this.acceptList[i]!.accept(c);
   }
 
+  /**
+   * A circuit with semiconductors keeps GMIN on every node, so says where it changes a reading:
+   * on a node of the circuit where nothing conducts much better than a very large resistor. Inside
+   * a model, and on a pin left unconnected, there is no reading to change.
+   */
+  private warnGminReading(): void {
+    const c = this.c;
+    if (c.gminSlots.length < c.nodeSlots.length || this.linear && !c.digital) return;
+    for (const d of c.devices) {
+      if (!(d instanceof Resistor) || d.resistance * c.gmin <= GMIN_SHARE) continue;
+      for (const node of d.nodes) {
+        if (node === 0 || !c.isTopNode[node] || /(^|.)nc_/.test(c.names[node]!)) continue;
+        const others = c.vals[c.mat.slot(node, node)]! - c.gmin;
+        if (c.gmin > GMIN_SHARE * others) c.warn(`${d.name.toUpperCase()} is so large that the ${c.gmin} S the solver keeps from every node to ground changes ${c.unknownName(node)}. Circuits with semiconductors need that path, so treat this reading as approximate`);
+      }
+    }
+  }
+
   /** Alternate the digital settle and the analog solve until they agree. */
   private solveMixed(warm: boolean, context: string): void {
     const c = this.c;
@@ -525,6 +560,7 @@ export class Analysis {
       }
     }
     this.settleAtSolution();
+    this.warnGminReading();
     for (let i = 1; i <= c.n; i++) {
       const a = Math.abs(c.x[i]!);
       if (c.isNode[i] && a > 1e9) {
@@ -1182,13 +1218,7 @@ export class Analysis {
   }
 
   private startRun(c: Circuit, opts: { tstart: number; tstop: number; tmaxRequested: number; epsBase: number; limited: boolean; horizon: number; col: Collector | null }): TranRun {
-    const waveLimit = this.waveStepLimit();
-    let tCap = opts.tmaxRequested;
-    if (opts.horizon / waveLimit > MAX_GROWTH_STEPS) {
-      c.warn(`A source's waveform needs steps of ${waveLimit.toExponential(2)} s, which would cost more than the step guard allows over this run, so it may not be resolved`);
-    } else {
-      tCap = Math.min(tCap, waveLimit);
-    }
+    let tCap = Math.min(opts.tmaxRequested, this.waveStepLimit());
     const dynamics = this.dynamicsStepLimit(opts.horizon);
     tCap = Math.min(tCap, dynamics.growth);
     // A fixed run pays for its ringing modes throughout. A live session only pays while they ring.
@@ -1247,6 +1277,13 @@ export class Analysis {
           throw new SimError(`Source '${d.name}' has ${corners.toExponential(2)} waveform corners before tstop; the limit is ${ABSURD_TRAN_STEPS / 1e4}`, "unsupported");
         }
       }
+    }
+
+    // Stepping over a source that it can't follow would give numbers with no meaning, so a run too
+    // long to follow it is refused. Anything shorter is resolved, and only what's stored is thinned.
+    const sourceSteps = tstop / this.waveStepLimit();
+    if (sourceSteps > this.stepLimit) {
+      throw new SimError(`At this stop time, following the fastest source would take ${sourceSteps.toExponential(1)} steps, and a transient may take ${this.stepLimit}. Shorten the stop time to at most ${(tstop * this.stepLimit / sourceSteps).toPrecision(2)} s`, "unsupported");
     }
 
     if (!this.stoppable(() => this.initialiseTran(req.uic === true))) {

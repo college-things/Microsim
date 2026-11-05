@@ -50,6 +50,8 @@ const AUTO_EDGE = 1e-9;
 const MAX_DELTAS = 100000;
 
 export interface DigitalModel {
+  /** Firmware/configuration changes that cannot safely inherit an execution state. */
+  stateKey?:string;
   inputs: number[];
   /** Respond to a change on trig, or -1 when arming at the start of a run. */
   evaluate(d: DigitalDomain, trig: number): void;
@@ -390,6 +392,7 @@ export class DigitalDomain extends Device implements DigitalHook {
     if (this.models.length !== o.models.length) return false;
     for (let i = 0; i < this.models.length; i++) {
       if (this.models[i]!.constructor !== o.models[i]!.constructor) return false;
+      if (this.models[i]!.stateKey !== o.models[i]!.stateKey) return false;
       if (!same(this.models[i]!.inputs, o.models[i]!.inputs)) return false;
     }
     for (let i = 0; i < this.readers.length; i++) {

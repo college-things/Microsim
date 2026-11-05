@@ -23,6 +23,8 @@ export interface Pin {
    * ground, hidden power pins and connections restored from an imported file.
    */
   net?: string;
+  /** Leaving it unconnected is normal, such as a microcontroller's unused port pin, so it gets no warning. */
+  optional?: boolean;
 }
 
 export type InstrumentKind =
@@ -32,6 +34,7 @@ export type InstrumentKind =
   | "bode-plotter"
   | "wattmeter"
   | "logic-analyzer"
+  | "serial-terminal"
   | "clock"
   | "unsupported";
 
@@ -100,6 +103,7 @@ export interface IndicatorSpec {
 }
 
 export interface SchComponent {
+  nativeMs14?: { sheet: string; component: string; symbol: string };
   id: string;
   refDes: string;
   /** Library part id such as "resistor", or "imported" for parts read from a file. */
@@ -159,6 +163,8 @@ export interface FreeText {
 }
 
 export interface Schematic {
+  nativeMs14?: { xml: string; baseline: string };
+  workspace?: import("./engineering").DesignWorkspace;
   name: string;
   components: SchComponent[];
   wires: Wire[];

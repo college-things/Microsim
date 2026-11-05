@@ -5,6 +5,8 @@
 import { Circuit } from "./circuit";
 import { VoltageSource } from "./devices";
 import { parseNumber } from "./expr";
+import { Mcu8051 } from './mcu-digital';
+import { UartTx } from './uart-tx';
 import { Comparator, Hysteresis, IdealSwitch, PhaseController, SquareWave, SwitchingLoss, TriggeredPwl } from "./codemodels";
 import {
   Clock,
@@ -218,6 +220,8 @@ export function familyLevels(c: Circuit, modelName: string): LogicLevels {
       note: `Digital levels for ${part} assumed from its TTL family: input ${low === high ? `threshold ${low} V` : `thresholds ${low} and ${high} V`}, outputs 0 and ${vcc} V`,
     };
   }
+  // A generic part stands for no real family, so these are simply its levels.
+  if (name.endsWith("_generic")) return DEFAULT_LEVELS;
   return {
     ...DEFAULT_LEVELS,
     note: `Digital levels for model ${name} assumed: its name gives no logic family, so inputs switch at 2.5 V and outputs swing 0 to 5 V`,
@@ -247,6 +251,36 @@ export function buildXspice(h: XHost, ports: XPort[], m: XModel): boolean {
   }
 
   switch (type) {
+    case 'd_mcu8051': {
+      if(ports.length!==2||flatten(ports[0]).length!==32||flatten(ports[1]).length!==1)throw new Error('8051: expected 32 port pins and a reset pin.');
+      const program=m.str('program',''),frequency=m.num('frequency',12e6);
+      // No program loaded yet: the chip holds still and its pins float. The app reports this separately.
+      if(!program.length)return true;
+      if(program.length>131072||program.length%2||!/^[\da-f]+$/i.test(program))throw new Error('8051: program must be 1–65536 hexadecimal bytes.');
+      if(!Number.isFinite(frequency)||frequency<12||frequency>100e6)throw new Error('8051: oscillator must be 12 Hz–100 MHz.');
+      const code=Uint8Array.from(program.match(/../g)!,b=>parseInt(b,16));
+      const pins=flatten(ports[0]).map(h.ref),reset=h.ref(flatten(ports[1])[0]);
+      c.deferred.push(()=>{
+        const d=domain(c),clock=d.internalNet(),echo=d.addDriver(clock,2);
+        const lows=pins.map(n=>d.outputDriver(c,n)),highs=pins.map((n,i)=>i<8?-1:d.outputDriver(c,n,true));
+        d.addModel(new Mcu8051(clock,echo,d.inputNet(c,reset),pins.map(n=>d.inputNet(c,n)),lows,highs,12/frequency,code,d));
+      });
+      return true;
+    }
+    case 'd_uart_tx': {
+      const out=flatten(ports[0]??[]);
+      if(ports.length!==1||out.length!==1)throw new Error('Serial input: expected one output pin.');
+      const baud=m.num('baud',9600),parity=m.str('parity','none').toLowerCase();
+      if(!Number.isFinite(baud)||baud<1||baud>10e6)throw new Error('Serial input: baud rate must be 1 to 10M.');
+      if(!['none','even','odd'].includes(parity))throw new Error('Serial input: parity must be none, even or odd.');
+      const node=h.ref(out[0]);
+      c.deferred.push(()=>{
+        const d=domain(c),clock=d.internalNet(),echo=d.addDriver(clock,2);
+        const model=new UartTx(clock,echo,d.outputDriver(c,node),1/baud,parity as 'none'|'even'|'odd');
+        d.addModel(model);c.serialInputs.set(h.name.toLowerCase(),model);
+      });
+      return true;
+    }
     case "d_pulldown":
     case "d_pullup": {
       const node = h.ref(flatten(ports[0])[0]!);

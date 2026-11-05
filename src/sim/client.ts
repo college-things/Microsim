@@ -2,6 +2,7 @@
 // because the worker is single-threaded. Stopping terminates it and fails every job.
 import type { AnalysisRequest, SimResult } from "../core/sim";
 import { SimError } from "../core/sim";
+import { NO_WORKER, spawnWorker } from "./spawn";
 
 interface Job {
   netlist: string;
@@ -30,7 +31,7 @@ function pump(): void {
   const job = queue.shift();
   if (!job) return;
   active = job;
-  worker ??= new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+  worker ??= spawnWorker();
   const id = nextId++;
   const finish = (settle: () => void) => {
     active = undefined;
@@ -52,7 +53,7 @@ function pump(): void {
     // A crashed worker can't be trusted with the next job.
     worker?.terminate();
     worker = undefined;
-    finish(() => job.reject(new Error(event.message || "The simulation stopped unexpectedly.")));
+    finish(() => job.reject(new Error(event.message || NO_WORKER)));
   };
   worker.postMessage({ id, netlist: job.netlist, request: job.request });
 }

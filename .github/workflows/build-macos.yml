@@ -1,9 +1,8 @@
 name: Build macOS app
 
+# Manual launch test of the macOS build; releases use release.yml.
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
 
 jobs:
   build:
@@ -46,9 +45,9 @@ jobs:
       - run: npx tauri build --target universal-apple-darwin
       - name: Launch test
         run: |
-          app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Ohmlet.app
+          app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Microsim.app
           codesign --verify --deep --verbose=2 "$app"
-          "$app/Contents/MacOS/ohmlet" > launch.log 2>&1 &
+          "$app/Contents/MacOS/microsim" > launch.log 2>&1 &
           pid=$!
           sleep 20
           screencapture -x launch.png || true
@@ -70,7 +69,7 @@ jobs:
           kill "$pid"
       - uses: actions/upload-artifact@v4
         with:
-          name: Ohmlet-macOS
+          name: Microsim-macOS
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
       - uses: actions/upload-artifact@v4
         if: always()
