@@ -1,5 +1,6 @@
 // Starter circuits, drawn for this app and built through the same API as the editor.
 import { Doc } from "./doc";
+import { assemble51 } from "../engine/asm51";
 import type { Schematic } from "./schematic";
 
 export interface Example {
@@ -184,7 +185,47 @@ EXAMPLES.push({
     doc.connectPins(mcu, "P3.1", terminal, "RX");
     doc.schematic.texts.push({ id: "uart-explanation", x: -100, y: 260, text: "P3.1 (TXD) sends 8N1 at 9600 baud. The serial terminal decodes it." });
   },
+}, {
+  name: "8051 serial echo",
+  build(doc) {
+    const program = assemble51(ECHO_SOURCE).code;
+    const mcu = doc.addPart("mcu8051", -60, 0, { frequency: "11.0592Meg", code: Array.from(program, (b) => b.toString(16).padStart(2, "0")).join(""), asm: ECHO_SOURCE });
+    const load = doc.addPart("resistor", 120, 120, { value: "100k" });
+    load.rotation = 90;
+    const gnd = doc.addPart("ground", 120, 220);
+    const terminal = doc.addPart("serial-terminal", 200, -60, { baud: "9600" });
+    doc.connectPins(mcu, "P3.1", load, "1");
+    doc.connectPins(load, "2", gnd, "g");
+    doc.connectPins(mcu, "RST", gnd, "g");
+    doc.connectPins(mcu, "P3.1", terminal, "RX");
+    doc.connectPins(mcu, "P3.0", terminal, "TX");
+    doc.schematic.texts.push({ id: "echo-explanation", x: -100, y: 260, text: "Run it, then type into the serial terminal. The 8051 sends each letter back in upper case." });
+  },
 });
+
+/** Echoes each received character, upper-casing letters. Shown in Design > Microcontroller program. */
+const ECHO_SOURCE = `; 9600 baud 8N1 at 11.0592 MHz: timer 1 in mode 2 reloads from 0FDH.
+        ORG 0
+        MOV TMOD,#20H
+        MOV TH1,#0FDH
+        MOV TL1,#0FDH
+        MOV SCON,#50H      ; mode 1, receiver enabled
+        SETB TR1
+WAIT:   JNB RI,WAIT        ; wait for a character
+        CLR RI
+        MOV A,SBUF
+        CJNE A,#'a',$+3    ; C is set when A < 'a'
+        JC SEND
+        CJNE A,#'z'+1,$+3  ; C is set when A <= 'z'
+        JNC SEND
+        CLR C
+        SUBB A,#20H        ; lower case to upper case
+SEND:   MOV SBUF,A
+        JNB TI,$
+        CLR TI
+        SJMP WAIT
+        END
+`;
 
 export function buildExample(example: Example): Schematic {
   const doc = new Doc();

@@ -215,6 +215,15 @@ function instrumentSpice(comp: SchComponent): string {
     const width = Math.max(edge, (parseValue(p.duty) / 100) * period - edge);
     return `V{ref} {pin:p} {pin:n} PULSE(${offset - amp} ${offset + amp} 0 ${edge} ${edge} ${width} ${period}) AC 1`;
   }
+  if (comp.instrument === "serial-terminal") {
+    // Its transmit pin is a serial line that text typed into the terminal goes out on.
+    const tx = comp.pins.find((pin) => /^TXD?$/i.test(pin.name));
+    if (!tx) return "";
+    const baud = readValue(p.baud ?? "9600");
+    const parity = ["none", "even", "odd"].includes(p.parity ?? "") ? p.parity : "none";
+    return `a{ref} {pin:${tx.name}} UART_{ref}
+.model UART_{ref} d_uart_tx(baud=${baud && baud > 0 ? baud : 9600} parity=${parity})`;
+  }
   if (comp.instrument === "multimeter") {
     if (p.mode === "amps") return "V{ref} {pin:p} {pin:n} DC 0";
     if (p.mode === "ohms") return "I{ref} {pin:n} {pin:p} DC 1m";

@@ -64,6 +64,12 @@ export function createLiveSession(netlist: string, options: { tmax?: number; uic
       get time(): number {
         return analysis.liveTime(run);
       },
+      send(device: string, bytes: number[]): boolean {
+        const input = circuit.serialInputs.get(device.toLowerCase());
+        if (!input) return false;
+        input.send(bytes.map((b) => b & 255));
+        return true;
+      },
       advance(untilTime: number, budgetMs: number): LiveChunk {
         if (!(untilTime >= 0) || !Number.isFinite(untilTime)) {
           throw new SimError("Live session time must be finite and not negative", "parse");

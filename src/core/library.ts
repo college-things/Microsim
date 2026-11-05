@@ -349,14 +349,14 @@ export const PARTS: PartDef[] = [
   },
   {
     kind: "serial-terminal", name: "Serial terminal", category: "Instruments", prefix: "XST",
-    pins: [{ name: "RX", x: 0, y: 25 }],
+    pins: [{ name: "RX", x: -10, y: 25, optional: true }, { name: "TX", x: 10, y: 25, optional: true }],
     params: [
       { key: "baud", label: "Baud rate", default: "9600" },
       { key: "parity", label: "Parity", default: "none", options: ["none", "even", "odd"] },
       { key: "threshold", label: "Logic threshold (V)", default: "2.5" },
     ],
     spice: "", instrument: "serial-terminal",
-    graphics: [...instrumentBox("UART", 48, 34), line(0, 17, 0, 25)],
+    graphics: [...instrumentBox("UART", 48, 34), line(-10, 17, -10, 25), line(10, 17, 10, 25), text(-10, 9, "RX", 6), text(10, 9, "TX", 6)],
   },
 ];
 

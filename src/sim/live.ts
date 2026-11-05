@@ -108,6 +108,11 @@ export class LiveRun {
     if (!this.stopped) this.worker.postMessage({ type: "stopAt", stopAt } satisfies LiveCommand);
   }
 
+  /** Types bytes into a serial input of the running circuit. */
+  send(device: string, bytes: number[]): void {
+    if (!this.stopped) this.worker.postMessage({ type: "send", device, bytes } satisfies LiveCommand);
+  }
+
   /** Applies changed values without losing state. Resolves false if it needs a restart instead. */
   update(netlist: string): Promise<boolean> {
     if (this.stopped) return Promise.resolve(false);

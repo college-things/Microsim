@@ -244,3 +244,14 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
   color: #b8f5b0;
   border-radius: 4px;
 }
+
+.serial-input {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.serial-input input {
+  flex: 1;
+  min-width: 0;
+  font: 12px ui-monospace, Consolas, monospace;
+}

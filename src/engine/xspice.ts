@@ -6,6 +6,7 @@ import { Circuit } from "./circuit";
 import { VoltageSource } from "./devices";
 import { parseNumber } from "./expr";
 import { Mcu8051 } from './mcu-digital';
+import { UartTx } from './uart-tx';
 import { Comparator, Hysteresis, IdealSwitch, PhaseController, SquareWave, SwitchingLoss, TriggeredPwl } from "./codemodels";
 import {
   Clock,
@@ -263,6 +264,20 @@ export function buildXspice(h: XHost, ports: XPort[], m: XModel): boolean {
         const d=domain(c),clock=d.internalNet(),echo=d.addDriver(clock,2);
         const lows=pins.map(n=>d.outputDriver(c,n)),highs=pins.map((n,i)=>i<8?-1:d.outputDriver(c,n,true));
         d.addModel(new Mcu8051(clock,echo,d.inputNet(c,reset),pins.map(n=>d.inputNet(c,n)),lows,highs,12/frequency,code,d));
+      });
+      return true;
+    }
+    case 'd_uart_tx': {
+      const out=flatten(ports[0]??[]);
+      if(ports.length!==1||out.length!==1)throw new Error('Serial input: expected one output pin.');
+      const baud=m.num('baud',9600),parity=m.str('parity','none').toLowerCase();
+      if(!Number.isFinite(baud)||baud<1||baud>10e6)throw new Error('Serial input: baud rate must be 1 to 10M.');
+      if(!['none','even','odd'].includes(parity))throw new Error('Serial input: parity must be none, even or odd.');
+      const node=h.ref(out[0]);
+      c.deferred.push(()=>{
+        const d=domain(c),clock=d.internalNet(),echo=d.addDriver(clock,2);
+        const model=new UartTx(clock,echo,d.outputDriver(c,node),1/baud,parity as 'none'|'even'|'odd');
+        d.addModel(model);c.serialInputs.set(h.name.toLowerCase(),model);
       });
       return true;
     }

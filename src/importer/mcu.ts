@@ -43,8 +43,10 @@ export function convertNiMcus(components: SchComponent[], xml: string, issues: I
       const baud = rate ? comp.params[rate[1]] : /baud_rate\s*=\s*([\w.]+)/i.exec(serial[1])?.[1];
       comp.spice = "";
       comp.instrument = "serial-terminal";
+      // Handshake lines are not modelled, and either data line may be left open.
+      for (const pin of comp.pins) pin.optional = true;
       comp.params = { ...comp.params, baud: baud ?? "9600", parity: "none", threshold: "2.5" };
-      issues.push({ severity: "info", message: `${comp.refDes}: NI virtual terminal converted to Microsim's serial terminal. It shows what arrives on RXD at ${comp.params.baud} baud; typing into it to send is not supported.` });
+      issues.push({ severity: "info", message: `${comp.refDes}: NI virtual terminal converted to Microsim's serial terminal. It shows what arrives on RXD and sends what you type on TXD, at ${comp.params.baud} baud; RTS and CTS are not modelled.` });
       continue;
     }
     const model = NI_MODEL.exec(comp.spice);

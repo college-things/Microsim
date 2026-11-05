@@ -1,3 +1,4 @@
+import type { UartTx } from './uart-tx';
 // Shared simulation state read and written by device models.
 
 import { SparseMatrix } from "./sparse";
@@ -98,6 +99,8 @@ export class Circuit {
 
   readonly devices: Device[] = [];
   readonly named = new Map<string, Device>();
+  /** Serial inputs a live run can type into, by lower-case instance name. */
+  readonly serialInputs = new Map<string, UartTx>();
   readonly warnings: string[] = [];
   private readonly warned = new Set<string>();
 

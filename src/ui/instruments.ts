@@ -723,18 +723,60 @@ export function createBode(host: HTMLElement, comp: SchComponent, onClose: () =>
 }
 
 /**
- * Receive-only serial terminal. It decodes UART frames on RX (referred to ground) from the transient data.
- * Live runs deliver a rolling window, so decoding resumes after the last frame already shown.
+ * Serial terminal. It decodes UART frames on RX (referred to ground) from the transient data, and what is
+ * typed into it goes out on TX while the circuit runs. Live chunks are decoded as they arrive.
+ * `send` types bytes into the running circuit and returns why it could not, if it could not.
  */
-export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onClose: () => void): InstrumentView {
-  const win = floatingWindow(host, `Serial terminal ${comp.refDes}`, 360, 240, onClose);
+export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onClose: () => void, send?: (bytes: number[]) => string | undefined): InstrumentView {
+  const win = floatingWindow(host, `Serial terminal ${comp.refDes}`, 360, 280, onClose);
   const screen = document.createElement("pre");
   screen.className = "serial-terminal";
   const detail = document.createElement("div");
   detail.className = "muted pad";
   const clearButton = document.createElement("button");
   clearButton.textContent = "Clear";
-  win.body.append(screen, detail, clearButton);
+  // Keys go out one at a time as they are typed, as on a real terminal; Enter sends the chosen line ending.
+  const typing = document.createElement("div");
+  typing.className = "serial-input";
+  const input = document.createElement("input");
+  input.placeholder = "Type here to send on TX";
+  input.setAttribute("aria-label", `Send from serial terminal ${comp.refDes}`);
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  const ending = document.createElement("select");
+  ending.setAttribute("aria-label", "Enter sends");
+  for (const [label, value] of [["Enter: CR", "\r"], ["Enter: LF", "\n"], ["Enter: CR LF", "\r\n"], ["Enter: nothing", ""]]) {
+    const option = document.createElement("option");
+    option.textContent = label;
+    option.value = value;
+    ending.append(option);
+  }
+  const sentNote = document.createElement("div");
+  sentNote.className = "muted pad";
+  let sent = 0;
+  const transmit = (chars: string) => {
+    // Characters outside one byte are sent as "?", as a terminal with an 8-bit character set would.
+    const bytes = [...chars].map((ch) => (ch.charCodeAt(0) < 256 ? ch.charCodeAt(0) : 63));
+    if (!bytes.length) return;
+    const problem = send ? send(bytes) : "This terminal cannot send.";
+    if (problem) { sentNote.textContent = problem; return; }
+    sent += bytes.length;
+    sentNote.textContent = `Sent ${sent} byte${sent === 1 ? "" : "s"} on TX.`;
+  };
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation(); // the sheet's own shortcuts must not see typing
+    if (event.key === "Enter") { event.preventDefault(); transmit(ending.value); input.value = ""; }
+    else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); transmit(event.key); }
+    else if (event.key === "Backspace") { event.preventDefault(); transmit("\b"); }
+    else if (event.key === "Tab") { event.preventDefault(); transmit("\t"); }
+    else if (event.key === "Escape") { event.preventDefault(); transmit("\x1b"); }
+  });
+  input.addEventListener("paste", (event) => {
+    event.preventDefault();
+    transmit((event.clipboardData?.getData("text") ?? "").replace(/\r?\n/g, ending.value));
+  });
+  typing.append(input, ending);
+  win.body.append(screen, typing, sentNote, detail, clearButton);
   let text = "", resume = -Infinity, errors = 0, streamed = false;
   // Samples not yet decoded, carried between live chunks so a frame split across two chunks is read whole.
   let tailTime: number[] = [], tailVolts: number[] = [];

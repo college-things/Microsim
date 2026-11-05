@@ -29,7 +29,9 @@ export type LiveCommand =
   /** Stop here instead, in simulated seconds. Absent runs until stopped. */
   | { type: "stopAt"; stopAt?: number }
   /** Applies changed values to the running circuit, keeping its state. */
-  | { type: "update"; id: number; netlist: string };
+  | { type: "update"; id: number; netlist: string }
+  /** Bytes typed into a serial input (a d_uart_tx instance), sent from the current simulated time. */
+  | { type: "send"; device: string; bytes: number[] };
 
 function runJob({ id, netlist, request }: WorkerJob): void {
   try {
@@ -152,6 +154,8 @@ function runLive(message: LiveCommand): void {
       // The caller falls back to a restart, which reports any real problem with the circuit.
     }
     self.postMessage({ type: "updated", id: message.id, applied });
+  } else if (message.type === "send") {
+    session?.send(message.device, message.bytes);
   } else {
     step();
   }

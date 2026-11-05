@@ -764,7 +764,17 @@ function openInstrument(comp: SchComponent): void {
   } else if (comp.instrument === "logic-analyzer") {
     view = createLogicAnalyzer(sheetHost, comp, settingsFor(), rescaled, onClose, running);
   } else if (comp.instrument === "serial-terminal") {
-    view = createSerialTerminal(sheetHost, comp, onClose);
+    const id = comp.id;
+    view = createSerialTerminal(sheetHost, comp, onClose, (bytes) => {
+      if (!live || !lastRun) return "Run the circuit, then type to send.";
+      const nets = lastRun.pinNets.get(id);
+      if (!nets?.has("TX") && !nets?.has("TXD")) return "Connect the terminal's TX pin to the circuit to send.";
+      const ref = lastRun.refs.get(id);
+      if (!ref) return "This terminal is not part of the running circuit. Run it again.";
+      // The netlist names the terminal's serial line a{ref}; see instrumentSpice.
+      live.send(`a${ref}`, bytes);
+      return undefined;
+    });
   }
   if (view) {
     views.set(comp.id, view);
