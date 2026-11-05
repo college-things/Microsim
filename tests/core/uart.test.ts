@@ -70,3 +70,12 @@ describe("UART gaps", () => {
     expect(later.bytes.every((b) => !b.error)).toBe(true);
   });
 });
+
+describe("terminal line endings", () => {
+  const bytes = (values: number[]) => values.map((value) => ({ time: 0, value }));
+  it("starts one line for CR, LF or CR LF, even when CR LF is split between calls", () => {
+    expect(terminalText(bytes([65, 13, 66, 10, 67, 13, 10, 68]))).toBe("A\nB\nC\nD");
+    const state = { afterCr: false };
+    expect(terminalText(bytes([65, 13]), state) + terminalText(bytes([10, 66]), state)).toBe("A\nB");
+  });
+});

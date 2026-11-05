@@ -85,12 +85,20 @@ export function decodeUart(time: ArrayLike<number>, volts: ArrayLike<number>, se
 }
 
 /** Printable terminal text; carriage returns are dropped and other control bytes shown as hex. */
-export function terminalText(bytes: UartByte[]): string {
+/**
+ * Printable terminal text. CR, LF and CR LF each start one new line; other control bytes show as hex.
+ * Pass the same `state` for successive calls so a CR LF split between two calls still makes one line.
+ */
+export function terminalText(bytes: UartByte[], state: { afterCr?: boolean } = {}): string {
   let out = "";
   for (const b of bytes) {
+    const afterCr = state.afterCr;
+    state.afterCr = false;
     if (b.error) out += "�";
-    else if (b.value === 10 || b.value === 9 || (b.value >= 32 && b.value < 127)) out += String.fromCharCode(b.value);
-    else if (b.value !== 13) out += `<${b.value.toString(16).padStart(2, "0")}>`;
+    else if (b.value === 13) { out += "\n"; state.afterCr = true; }
+    else if (b.value === 10) { if (!afterCr) out += "\n"; }
+    else if (b.value === 9 || (b.value >= 32 && b.value < 127)) out += String.fromCharCode(b.value);
+    else out += `<${b.value.toString(16).padStart(2, "0")}>`;
   }
   return out;
 }

@@ -9,7 +9,9 @@ import { unsimulatedParts } from "../../src/core/limits";
 import type { SchComponent } from "../../src/core/schematic";
 import { assemble51 } from "../../src/engine/asm51";
 import { programHex } from "../../src/engine/ihex";
-import { simulate } from "../../src/engine";
+import { createLiveSession, simulate } from "../../src/engine";
+import { decodeUart, terminalText } from "../../src/core/uart";
+import { readValue } from "../../src/core/netlist";
 import { importMs14 } from "../../src/importer/index";
 import { convertNiMcus, readMcuWorkspace } from "../../src/importer/mcu";
 import { serializeMs14 } from "../../src/importer/writer";
@@ -80,7 +82,7 @@ describe.skipIf(!present)("NI 8051 samples on the built-in core", () => {
       const netlist = buildNetlist(schematic);
       const slow = /Blinking/i.test(file);
       const result = simulate(netlist.text, { type: "tran", tstep: 1e-5, tstop: slow ? 0.3 : 5e-3, tmax: slow ? 1e-4 : 1e-5 });
-      // The serial terminal sample only echoes typed characters, so its chip stays quiet without input.
+      // The serial terminal sample only echoes typed characters, so its chip stays quiet without input; see below.
       if (/SerialTerminal/i.test(file)) return;
       const nets = netlist.pinNets.get(mcus[0].id)!;
       const changing = [...nets].filter(([pin, net]) => {
@@ -103,6 +105,24 @@ describe.skipIf(!present)("NI 8051 samples on the built-in core", () => {
     expect(terminal?.params.baud).toBe("1.2k");
     expect(unsimulatedParts(schematic).some((n) => /serial port/.test(n))).toBe(false);
   });
+  it("echoes what is typed into the converted terminal of the SerialTerminal sample", () => {
+    const file = join(ROOT, "SerialTerminal.ms14");
+    const { schematic } = importMs14(new Uint8Array(readFileSync(file)));
+    const mcu = schematic.components.find((c) => c.params.mcu === "8051")!;
+    mcu.params.code = programHex(assemble51(readFileSync(sourceFor(file, mcu)!, "latin1")).code);
+    const terminal = schematic.components.find((c) => c.instrument === "serial-terminal")!;
+    const netlist = buildNetlist(schematic);
+    const rx = netlist.pinNets.get(terminal.id)!.get("RXD")!;
+    expect(netlist.pinNets.get(terminal.id)!.get("TXD")).not.toBe(rx);
+    const session = createLiveSession(netlist.text, { tmax: 5e-6 });
+    const index = session.names.map((n) => n.toLowerCase()).indexOf(`v(${rx})`.toLowerCase());
+    const time: number[] = [], volts: number[] = [];
+    const run = (until: number) => { while (session.time < until * (1 - 1e-9)) { const c = session.advance(until, 1e9); time.push(...c.time); volts.push(...c.values[index]); } };
+    run(2e-3);
+    expect(session.send(`a${netlist.refs.get(terminal.id)}`, [..."Echo"].map((c) => c.charCodeAt(0)))).toBe(true);
+    run(60e-3);
+    expect(terminalText(decodeUart(time, volts, { baud: readValue(terminal.params.baud)!, threshold: 2.5 }).bytes)).toBe("Echo");
+  }, 120000);
 });
 
 // Independent check, with SDCC's separately installed uCsim: its disassembler must agree with every instruction

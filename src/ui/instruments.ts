@@ -766,11 +766,18 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
   input.addEventListener("keydown", (event) => {
     event.stopPropagation(); // the sheet's own shortcuts must not see typing
     if (event.key === "Enter") { event.preventDefault(); transmit(ending.value); input.value = ""; }
-    else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); transmit(event.key); }
     else if (event.key === "Backspace") { event.preventDefault(); transmit("\b"); }
     else if (event.key === "Tab") { event.preventDefault(); transmit("\t"); }
     else if (event.key === "Escape") { event.preventDefault(); transmit("\x1b"); }
   });
+  // Text arrives here however it was entered: keys, an input method, dictation or an on-screen keyboard.
+  // It is sent at once and the box cleared, so the box only ever holds text still being composed.
+  input.addEventListener("input", (event) => {
+    if ((event as InputEvent).isComposing) return;
+    transmit(input.value);
+    input.value = "";
+  });
+  input.addEventListener("compositionend", () => { transmit(input.value); input.value = ""; });
   input.addEventListener("paste", (event) => {
     event.preventDefault();
     transmit((event.clipboardData?.getData("text") ?? "").replace(/\r?\n/g, ending.value));
@@ -778,6 +785,7 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
   typing.append(input, ending);
   win.body.append(screen, typing, sentNote, detail, clearButton);
   let text = "", resume = -Infinity, errors = 0, streamed = false;
+  const lineState = { afterCr: false };
   // Samples not yet decoded, carried between live chunks so a frame split across two chunks is read whole.
   let tailTime: number[] = [], tailVolts: number[] = [];
   const reset = () => { text = ""; resume = -Infinity; errors = 0; streamed = false; tailTime = []; tailVolts = []; screen.textContent = ""; };
@@ -789,7 +797,7 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
     resume = decoded.resume;
     if (decoded.gap && text) text += "\n[samples missed: decoding resynchronized]\n";
     errors += decoded.bytes.filter((b) => b.error).length;
-    text += terminalText(decoded.bytes);
+    text += terminalText(decoded.bytes, lineState);
     if (text.length > 20000) text = text.slice(-20000);
     if (screen.textContent !== text) { screen.textContent = text; screen.scrollTop = screen.scrollHeight; }
     detail.textContent = describe() + (errors ? ` ${errors} frame error${errors === 1 ? "" : "s"} (shown as �).` : "");

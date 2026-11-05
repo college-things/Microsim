@@ -100,10 +100,10 @@ These are planned, in this order. Until they land, the app can't do them.
     - Spreadsheet View, comments, shapes and description box
     - hierarchical blocks, pages and subcircuits
     - title block and printing
-13. **Microcontrollers:** NI PIC conversion and a PIC16 core, a PIC assembler, LCDs, sending text from the serial terminal, keypad and debugger. The built-in 8051 core executes firmware, and imported NI 8051/8052 parts and their assembly source now run on it.
+13. **Microcontrollers:** NI PIC conversion and a PIC16 core, a PIC assembler, LCDs, keypad and debugger. The built-in 8051 core executes firmware, and imported NI 8051/8052 parts and their assembly source now run on it.
 14. **Assistant coverage, original examples and final docs.**
 
-Imported NI PIC microcontrollers and LCDs still open with notices and do nothing. NI 8051/8052 parts run on the built-in core once their program is loaded, and NI virtual terminals become the receive-only serial terminal.
+Imported NI PIC microcontrollers and LCDs still open with notices and do nothing. NI 8051/8052 parts run on the built-in core once their program is loaded, and NI virtual terminals become the serial terminal, which shows what arrives and sends what you type.
 
 ## 4. What Claude can't do
 
