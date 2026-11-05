@@ -30,7 +30,7 @@ Each of these depends on another company's product or material, or would work ag
 - **PCB layout and transfer.** Two-layer routing with plated vias, adjustable through-hole pads, connectivity/clearance checks, KiCad export, and Gerber/NC-drill ZIP export are available. Gerber, drill and ZIP parsing were independently checked. Zones, autorouting, surface-mount pads, silkscreen export and transfer to Ultiboard are not implemented; fabrication suitability remains unverified.
 - **VHDL and FPGA design.** Real GHDL analysis/simulation and an iCE40 HX1K/TQ144 bitstream build passed installed-tool and browser checks. They require the local build bridge and tools. Other families, device programming and analog/HDL co-simulation are not implemented.
 - **Database Manager, Component Wizard, Symbol Editor and Title Block Editor.** A planned model block will build a part from pasted SPICE text instead.
-- **A C compiler for microcontrollers.** Real SDCC compilation and independent built-in 8051 circuit execution are implemented. Compiled or imported Intel HEX can be attached to a core and saved with the circuit. GPIO, timers, interrupts and instruction timing have tests, including uCsim comparisons and real compiled C. The 8051 serial port (modes 0–3) drives real TXD waveforms, and the **Serial terminal** instrument decodes them. Imported NI MCU parts, PICs, physical chip power behavior and external bus waveforms remain unsupported. See the design workflow guide for the exact boundary.
+- **A C compiler for microcontrollers.** Real SDCC compilation and independent built-in 8051 circuit execution are implemented. Compiled or imported Intel HEX can be attached to a core and saved with the circuit. GPIO, timers, interrupts and instruction timing have tests, including uCsim comparisons and real compiled C. The 8051 serial port (modes 0–3) drives real TXD waveforms, and the **Serial terminal** instrument decodes them. Imported NI 8051/8052 parts now convert to this core, and **Design > Microcontroller program** assembles their source here. NI PIC parts, physical chip power behavior and external bus waveforms remain unsupported. See the design workflow guide for the exact boundary.
 - **Reading `.mcuws` and `.mcuprj` project files.** They're undocumented and not needed, because a person picks the program file.
 - **Tank and conveyor machine behaviour.** Original placeable models simulate transient state and sensor outputs, with animated fill/motion and physical-unit readouts. Imported NI scripts, falling objects and exact sample behavior are still unsupported; those imported parts retain their starting models and notices.
 - **Rated parts that blow, and 3D parts.** No sample has them, and blowing needs the circuit to change during a run.
@@ -100,10 +100,10 @@ These are planned, in this order. Until they land, the app can't do them.
     - Spreadsheet View, comments, shapes and description box
     - hierarchical blocks, pages and subcircuits
     - title block and printing
-13. **Microcontrollers:** imported NI MCU conversion, PIC16, assemblers, LCDs, sending text from the serial terminal, keypad and debugger. The independent built-in 8051 core now executes firmware.
+13. **Microcontrollers:** NI PIC conversion and a PIC16 core, a PIC assembler, LCDs, sending text from the serial terminal, keypad and debugger. The built-in 8051 core executes firmware, and imported NI 8051/8052 parts and their assembly source now run on it.
 14. **Assistant coverage, original examples and final docs.**
 
-Imported NI microcontrollers, LCDs and serial-port parts still open with notices and do nothing. This does not apply to the independently implemented built-in 8051 core.
+Imported NI PIC microcontrollers and LCDs still open with notices and do nothing. NI 8051/8052 parts run on the built-in core once their program is loaded, and NI virtual terminals become the receive-only serial terminal.
 
 ## 4. What Claude can't do
 
