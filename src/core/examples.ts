@@ -1,7 +1,8 @@
 // Starter circuits, drawn for this app and built through the same API as the editor.
 import { Doc } from "./doc";
 import { assemble51 } from "../engine/asm51";
-import type { Schematic } from "./schematic";
+import type { SchComponent, Schematic } from "./schematic";
+import { pinWorld } from "./netlist";
 
 export interface Example {
   name: string;
@@ -535,5 +536,55 @@ EXAMPLES.push({
     doc.connectPins(regulator, "OUT", meter, "p");
     doc.connectPins(meter, "n", ground, "g");
     doc.schematic.texts.push({ id: "7805-load", x: -120, y: 240, text: "12 V in, 5 V out at 50 mA. Model includes 2 V dropout and 1.5 A current limit; no thermal shutdown." });
+  },
+});
+
+EXAMPLES.push({
+  name: "Two-page gain stages",
+  build(doc) {
+    const label = (d: Doc, comp: SchComponent, pin: string, net: string, dx: number) => {
+      const at = pinWorld(comp, comp.pins.find((p) => p.name === pin)!);
+      d.addWire([at, { x: at.x + dx, y: at.y }]);
+      // On the page being edited, which is not always page 1.
+      d.sheet.labels.push({ id: `label-${net}-${comp.id}`, x: at.x + dx, y: at.y, net });
+    };
+    // The block is drawn and wired as a person would: a non-inverting op-amp stage with a gain of 2.
+    // Its IN and OUT labels become the block's pins when it is made with Replace by hierarchical block.
+    const scratch = new Doc();
+    const amp = scratch.addPart("opamp", 0, 0);
+    const rf = scratch.addPart("resistor", 0, -90, { value: "10k" });
+    const rg = scratch.addPart("resistor", -80, 90, { value: "10k" });
+    rg.rotation = 90;
+    const stageGround = scratch.addPart("ground", -80, 200);
+    scratch.connectPins(amp, "-", rf, "1");
+    scratch.connectPins(rf, "2", amp, "out");
+    scratch.connectPins(amp, "-", rg, "1");
+    scratch.connectPins(rg, "2", stageGround, "g");
+    const inside = new Set([amp.id, rf.id, rg.id, stageGround.id, ...scratch.schematic.wires.map((w) => w.id)]);
+    label(scratch, amp, "+", "IN", -60);
+    label(scratch, amp, "out", "OUT", 60);
+    scratch.createBlock(inside, "Gain stage (2 V/V)");
+    const block = scratch.schematic.blocks![0];
+    block.id = "gain-stage";
+    doc.schematic.blocks = [block];
+
+    // Page 1: a 1 V source into the first stage, with a meter on the link to page 2.
+    const source = doc.addPart("vdc", -200, 0, { value: "1" });
+    const ground = doc.addPart("ground", -200, 140);
+    doc.connectPins(source, "n", ground, "g");
+    const first = doc.placeBlock("gain-stage", 0, 0);
+    doc.connectPins(source, "p", first, "IN");
+    const meter = doc.addPart("multimeter", 140, 100);
+    doc.connectPins(meter, "p", first, "OUT");
+    doc.connectPins(meter, "n", ground, "g");
+    label(doc, first, "OUT", "BETWEEN", 60);
+    doc.schematic.texts.push({ id: "gain-note", x: -220, y: 220, text: "1 V in, 2 V on BETWEEN, 4 V on OUTPUT (page 2). Double-click a block to open it." });
+
+    // Page 2: a second instance of the same block, joined to page 1 by the BETWEEN label.
+    doc.addPage("Second stage");
+    const second = doc.placeBlock("gain-stage", 0, 0);
+    label(doc, second, "IN", "BETWEEN", -60);
+    label(doc, second, "OUT", "OUTPUT", 60);
+    doc.openPage(0);
   },
 });

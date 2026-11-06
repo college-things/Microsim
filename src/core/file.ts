@@ -51,7 +51,7 @@ function graphic(g: unknown): void {
   }
 }
 
-function checkSchematic(s: unknown): Schematic {
+function checkSchematic(s: unknown, child = false): Schematic {
   if (!isObj(s)) fail("no circuit");
   const doc = s as Record<string, unknown>;
   if (doc.titleBlock !== undefined) {
@@ -68,6 +68,7 @@ function checkSchematic(s: unknown): Schematic {
   for (const c of doc.components as unknown[]) {
     if (!isObj(c) || !isStr(c.id) || !isStr(c.refDes) || !isStr(c.kind) || !isStr(c.spice)) fail("part");
     const comp = c as Record<string, unknown>;
+    if (comp.blockId !== undefined && !isStr(comp.blockId)) fail("block reference");
     if (!isNum(comp.x) || !isNum(comp.y) || ![0, 90, 180, 270].includes(comp.rotation as number)) fail("part position");
     if (typeof comp.mirrored !== "boolean" || !isObj(comp.params) || !Array.isArray(comp.pins)) fail("part");
     if (!Object.values(comp.params as object).every(isStr)) fail("part settings");
@@ -97,6 +98,57 @@ function checkSchematic(s: unknown): Schematic {
   }
   for (const t of doc.texts as unknown[]) {
     if (!isObj(t) || !isStr(t.id) || !isNum(t.x) || !isNum(t.y) || !isStr(t.text)) fail("note");
+  }
+  if (child && (doc.pages !== undefined || doc.blocks !== undefined)) fail("nested sheet storage");
+  for (const key of ["pages", "blocks"]) {
+    if (doc[key] === undefined) continue;
+    if (!Array.isArray(doc[key]) || (doc[key] as unknown[]).length > 1000) fail(key);
+    for (const item of doc[key] as unknown[]) checkSchematic(item, true);
+  }
+  if (!child) {
+    const root = s as Schematic;
+    const blocks = new Map<string, import("./schematic").BlockDefinition>();
+    for (const b of root.blocks ?? []) {
+      if (!isStr(b.id) || !b.id || blocks.has(b.id)) fail("block id");
+      blocks.set(b.id, b);
+      const names = new Set<string>();
+      for (const c of b.components) {
+        if (c.instrument || c.indicator || c.kind === "lcd16x2") fail("instruments inside blocks");
+        if (c.kind !== "hierarchy-port") continue;
+        if (!c.params.name?.trim() || names.has(c.params.name) || c.pins.length !== 1 || c.pins[0].name !== "port") fail("block port");
+        names.add(c.params.name);
+      }
+    }
+    const pages = [root, ...(root.pages ?? [])];
+    const refs = new Set<string>(), ids = new Set<string>();
+    for (const page of pages) {
+      for (const item of [...page.components, ...page.wires, ...page.labels, ...page.texts]) {
+        if (ids.has(item.id)) fail("duplicate object id across pages");
+        ids.add(item.id);
+      }
+      for (const c of page.components) {
+        if (!c.refDes) continue;
+        // Existing imported circuits can contain duplicate names. Enforce the new page
+        // invariant only for multi-page files, retaining compatibility with those files.
+        if (root.pages?.length && refs.has(c.refDes.toUpperCase())) fail("duplicate reference across pages");
+        refs.add(c.refDes.toUpperCase());
+      }
+    }
+    const checked = new Set<string>();
+    const visit = (sheet: Schematic, stack: string[]) => {
+      if (stack.length > 32) fail("block nesting");
+      for (const c of sheet.components) {
+        if (!c.blockId) continue;
+        const block = blocks.get(c.blockId);
+        if (!block) fail("missing block");
+        if (stack.includes(c.blockId)) fail("recursive block");
+        const ports = block!.components.filter((p) => p.kind === "hierarchy-port");
+        if (ports.length !== c.pins.length || ports.some((p) => !c.pins.some((pin) => pin.name === p.params.name))) fail("block pin mismatch");
+        if (!checked.has(c.blockId)) { visit(block!, [...stack, c.blockId]); checked.add(c.blockId); }
+      }
+    };
+    for (const page of pages) visit(page, []);
+    for (const block of blocks.values()) visit(block, [block.id]);
   }
   return s as Schematic;
 }

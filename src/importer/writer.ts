@@ -1,3 +1,4 @@
+import { flattenCircuit, hasHierarchy } from "../core/hierarchy";
 // Original schema-67 writer. The extension retains editor-only data; the ordinary
 // sheet contains flattened geometry, ports, nodes and expanded SPICE templates.
 import type { CircuitFile } from "../core/file";
@@ -103,7 +104,10 @@ export function encodeContainer(data: Uint8Array): Uint8Array {
 }
 
 export function ms14Xml(file: CircuitFile): string {
-  const s = structuredClone(file.schematic);
+  const s = structuredClone(flattenCircuit(file.schematic, true));
+  // Port and instance terminals are already resolved into the leaf pins' named nets.
+  // Their editable drawings remain in the complete editor extension below.
+  s.components = s.components.filter((c) => !c.kind.startsWith("hierarchy-"));
   // Native schematic views open at the positive origin. Preserve editor coordinates
   // in the extension while moving the exported sheet into its visible work area.
   const positions=[...s.components.flatMap(c=>c.pins.map(p=>pinWorld(c,p))),...s.wires.flatMap(w=>w.points),...s.labels,...s.texts];
@@ -270,7 +274,7 @@ export function serializeNativeMs14(file: CircuitFile): Uint8Array {
   return encodeContainer(Uint8Array.from(text, (c) => c.charCodeAt(0)));
 }
 export function serializeMs14(file: CircuitFile, options: { flattenNative?: boolean } = {}): Uint8Array {
-  if (file.schematic.nativeMs14 && !options.flattenNative) return serializeNativeMs14(file);
+  if (file.schematic.nativeMs14 && !options.flattenNative && !hasHierarchy(file.schematic)) return serializeNativeMs14(file);
   // Escape all non-ASCII in the extension as XML numeric entities.
   return encodeContainer(new TextEncoder().encode(ms14Xml(file).replace(/[^\x00-\x7f]/g, (c) => `&#${c.charCodeAt(0)};`)));
 }

@@ -1,3 +1,4 @@
+import { flattenCircuit } from "../../src/core/hierarchy";
 import { describe, expect, it } from "vitest";
 import { Doc } from "../../src/core/doc";
 import { buildExample, EXAMPLES } from "../../src/core/examples";
@@ -154,14 +155,14 @@ function parseSexpr(text: string): Expr[] {
 
 describe("KiCad netlist", () => {
   it.each(EXAMPLES.map((example) => [example.name, example] as const))("exports components and connected pins from %s", (_, example) => {
-    const schematic = buildExample(example);
+    const schematic = flattenCircuit(buildExample(example));
     const tree = parseSexpr(kicadNetlist(schematic));
     expect(tree[0]).toBe("export");
     const section = (name: string) => tree.find((e) => Array.isArray(e) && e[0] === name) as Expr[];
     expect(section("version")).toEqual(["version", "E"]);
     const components = section("components").slice(1) as Expr[][];
     const refs = components.map((c) => (c[1] as Expr[])[1]);
-    const included = schematic.components.filter((c) => c.kind !== "ground" && c.kind !== "vcc" && !c.instrument && c.pins.length);
+    const included = schematic.components.filter((c) => c.kind !== "ground" && c.kind !== "vcc" && !c.kind.startsWith("hierarchy-") && !c.instrument && c.pins.length);
     expect(refs).toHaveLength(included.length);
     const pinNets = buildNetlist(schematic).pinNets;
     const codes = new Set<string>();

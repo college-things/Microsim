@@ -1,3 +1,4 @@
+import { flattenCircuit } from "./hierarchy";
 // Circuit reports share the simulator's connectivity and value validation.
 import { PART_BY_KIND } from "./library";
 import { buildNetlist, componentTemplate, shownValue } from "./netlist";
@@ -15,13 +16,14 @@ export interface BomRow {
 
 const natural = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
 // Ground and supply-rail symbols name a net; they are not parts anyone buys.
-const physicalPart = (c: SchComponent) => c.kind !== "ground" && c.kind !== "vcc" && !c.instrument
+const physicalPart = (c: SchComponent) => c.kind !== "ground" && c.kind !== "vcc" && c.kind !== "hierarchy-block" && c.kind !== "hierarchy-port" && !c.instrument
   && !PART_BY_KIND.get(c.kind)?.instrument && c.pins.length > 0;
 const valueOf = (c: SchComponent) => c.params[c.valueKey ?? PART_BY_KIND.get(c.kind)?.valueParam ?? "value"] ?? shownValue(c) ?? "";
 // Custom model blocks can share a display value while using different SPICE models.
 const modelOf = (c: SchComponent) => c.params.model ?? c.spice;
 
 export function billOfMaterials(schematic: Schematic): BomRow[] {
+  schematic = flattenCircuit(schematic);
   const groups = new Map<string, BomRow>();
   for (const comp of schematic.components.filter(physicalPart)) {
     const value = valueOf(comp), model = modelOf(comp), footprint = comp.params.footprint ?? "";
@@ -73,6 +75,7 @@ function digitalOutputs(c: SchComponent): string[] {
 }
 
 export function electricalRulesCheck(schematic: Schematic): ErcFinding[] {
+  schematic = flattenCircuit(schematic);
   const netlist = buildNetlist(schematic);
   const findings: ErcFinding[] = [];
   const handled = new Set<string>();
@@ -131,6 +134,7 @@ export function electricalRulesCheck(schematic: Schematic): ErcFinding[] {
 const sexpr = (value: string) => JSON.stringify(value);
 
 export function kicadNetlist(schematic: Schematic): string {
+  schematic = flattenCircuit(schematic);
   const { pinNets } = buildNetlist(schematic);
   const parts = schematic.components.filter(physicalPart).sort((a, b) => natural(a.refDes, b.refDes));
   const nets = new Map<string, { ref: string; pin: string }[]>();
