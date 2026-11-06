@@ -1,5 +1,5 @@
 // Floating instrument windows and how each one reads a finished simulation.
-import { acRms, findVector, settledMean, settledRms } from "../core/analyses";
+import { acRms, findVector, fourier, settledMean, settledRms } from "../core/analyses";
 
 export { acRms, settledMean };
 import { readValue } from "../core/netlist";
@@ -10,6 +10,7 @@ import {coupleScope,scopeTrigger} from '../core/scope';
 import { decodeUart, terminalText } from "../core/uart";
 import { countFrequency, spectrum } from "../core/measure";
 import { minimize, type TruthTable } from "../core/logic";
+import type { IvCurve } from "../core/ivcurves";
 
 export interface RunData {
   op?: SimResult;
@@ -985,6 +986,103 @@ export function createLogicConverter(host: HTMLElement, comp: SchComponent, onCl
     clear() {
       expression.textContent = "";
       table.replaceChildren();
+    },
+  };
+}
+
+export function createDistortionAnalyzer(host: HTMLElement, comp: SchComponent, onClose: () => void): InstrumentView {
+  const win = floatingWindow(host, `Distortion analyzer ${comp.refDes}`, 340, 340, onClose);
+  const display = document.createElement("div");
+  display.className = "readout";
+  display.textContent = "--";
+  const detail = document.createElement("div");
+  detail.className = "muted pad";
+  detail.textContent = "Connect IN and run the circuit.";
+  const table = document.createElement("div");
+  table.className = "logic-table";
+  win.body.append(display, detail, table);
+  return {
+    element: win.root,
+    follow(part) {
+      comp = part;
+      win.setTitle(`Distortion analyzer ${comp.refDes}`);
+    },
+    update(run) {
+      const wave = inputWave(run, comp);
+      table.replaceChildren();
+      if (!wave) { display.textContent = "--"; detail.textContent = run.tran ? "Connect IN to a signal." : "Needs a transient run."; return; }
+      const given = comp.params.fundamental?.trim() ? readValue(comp.params.fundamental) : undefined;
+      const fundamental = given && given > 0 ? given : countFrequency(wave.time, wave.volts)?.frequency;
+      if (!fundamental) { display.textContent = "--"; detail.textContent = "No steady signal yet: it needs at least two whole periods, or set the fundamental."; return; }
+      const harmonics = Math.max(2, Math.min(50, Math.round(readValue(comp.params.harmonics ?? "9") ?? 9)));
+      let result;
+      try { result = fourier(wave.time, wave.volts, fundamental, harmonics); }
+      catch (error) { display.textContent = "--"; detail.textContent = error instanceof Error ? error.message : String(error); return; }
+      display.textContent = `${result.thd.toFixed(result.thd < 1 ? 3 : 2)} % THD`;
+      detail.textContent = `Fundamental ${formatSI(fundamental, "Hz")}${given ? " (set)" : " (measured)"}, ${formatSI(result.rows[0].magnitude, "V")} peak. Harmonics 2 to ${harmonics}, over the last whole period.`;
+      const grid = document.createElement("table");
+      const head = grid.createTHead().insertRow();
+      for (const name of ["Harmonic", "Frequency", "Amplitude", "Relative"]) head.append(Object.assign(document.createElement("th"), { textContent: name }));
+      const body = grid.createTBody();
+      const base = result.rows[0].magnitude || 1;
+      for (const row of result.rows) {
+        const tr = body.insertRow();
+        tr.insertCell().textContent = String(row.harmonic);
+        tr.insertCell().textContent = formatSI(row.frequency, "Hz");
+        tr.insertCell().textContent = formatSI(row.magnitude, "V");
+        tr.insertCell().textContent = `${(20 * Math.log10(Math.max(row.magnitude / base, 1e-12))).toFixed(1)} dB`;
+      }
+      table.append(grid);
+    },
+    clear() {
+      display.textContent = "--";
+      detail.textContent = "The circuit changed. Run it to measure.";
+      table.replaceChildren();
+    },
+  };
+}
+
+/** IV analyzer. Like the logic converter it runs its own sweeps on demand, through `trace`. */
+export function createIvAnalyzer(host: HTMLElement, comp: SchComponent, onClose: () => void, trace: () => Promise<IvCurve[]>): InstrumentView {
+  const win = floatingWindow(host, `IV analyzer ${comp.refDes}`, 520, 420, onClose);
+  const intro = document.createElement("div");
+  intro.className = "muted pad";
+  const describe = () => {
+    const roles: Record<string, string> = { "two-terminal": "1 = +, 2 = -", npn: "1 = C, 2 = B, 3 = E", pnp: "1 = C, 2 = B, 3 = E", nmos: "1 = D, 2 = G, 3 = S", pmos: "1 = D, 2 = G, 3 = S" };
+    intro.textContent = `Pins: ${roles[comp.params.mode ?? "two-terminal"] ?? roles["two-terminal"]}. Wire the device only to the analyzer: anything else connected becomes part of the curve. Change the device type and sweep in Properties.`;
+  };
+  describe();
+  const button = document.createElement("button");
+  button.textContent = "Trace curves";
+  const note = document.createElement("div");
+  note.className = "muted pad";
+  const plot = new Plot(win.body);
+  win.body.prepend(intro, button, note);
+  button.onclick = async () => {
+    button.disabled = true;
+    button.textContent = "Tracing...";
+    note.textContent = "";
+    try {
+      const curves = await trace();
+      plot.set(curves.map((c) => ({ label: c.label, x: c.volts, y: c.amps, unit: "A" })), { xLabel: "Voltage (V)", xUnit: "V", yLabel: "Current (A)" });
+    } catch (error) {
+      plot.set([]);
+      note.textContent = error instanceof Error ? error.message : String(error);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Trace curves";
+    }
+  };
+  return {
+    element: win.root,
+    follow(part) {
+      comp = part;
+      win.setTitle(`IV analyzer ${comp.refDes}`);
+      describe();
+    },
+    update() {},
+    clear() {
+      plot.set([]);
     },
   };
 }

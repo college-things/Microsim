@@ -388,6 +388,28 @@ export const PARTS: PartDef[] = [
     graphics: [...instrumentBox("WORD GEN", 84, 40), ...Array.from({ length: 8 }, (_, i) => line(-35 + i * 10, 20, -35 + i * 10, 30))],
   },
   {
+    kind: "distortion-analyzer", name: "Distortion analyzer", category: "Instruments", prefix: "XDA",
+    pins: [{ name: "IN", x: 0, y: 25 }],
+    params: [
+      { key: "fundamental", label: "Fundamental (Hz, blank to measure)", default: "", text: true },
+      { key: "harmonics", label: "Harmonics to include", default: "9" },
+    ],
+    spice: "", instrument: "distortion-analyzer",
+    graphics: [...instrumentBox("THD", 48, 34), line(0, 17, 0, 25)],
+  },
+  {
+    kind: "iv-analyzer", name: "IV analyzer", category: "Instruments", prefix: "XIV",
+    pins: ["1", "2", "3"].map((name, i) => ({ name, x: -15 + i * 15, y: 30, optional: true })),
+    params: [
+      { key: "mode", label: "Device", default: "two-terminal", options: ["two-terminal", "npn", "pnp", "nmos", "pmos"] },
+      { key: "vmax", label: "Sweep to (V)", default: "5" },
+      { key: "vstart", label: "Sweep from (V, blank for -end or 0)", default: "", text: true },
+      { key: "steps", label: "Steps (A for BJT base, V for MOSFET gate)", default: "", text: true },
+    ],
+    spice: "", instrument: "iv-analyzer",
+    graphics: [...instrumentBox("IV", 52, 40), ...[0, 1, 2].map((i) => line(-15 + i * 15, 20, -15 + i * 15, 30)), text(-15, 14, "1", 6), text(0, 14, "2", 6), text(15, 14, "3", 6)],
+  },
+  {
     kind: "logic-converter", name: "Logic converter", category: "Instruments", prefix: "XLC",
     pins: [...Array.from({ length: 8 }, (_, i) => ({ name: "ABCDEFGH"[i], x: -40 + i * 10, y: 30, optional: true })), { name: "OUT", x: 40, y: 30, optional: true }],
     params: [{ key: "high", label: "Logic high (V)", default: "5" }],
