@@ -959,9 +959,9 @@ export function createLogicConverter(host: HTMLElement, comp: SchComponent, onCl
       setText(expression, `OUT = ${minimize(result.inputs, result.outputs)}`);
       const grid = document.createElement("table");
       const head = grid.createTHead().insertRow();
-      for (const name of [...result.inputs, "OUT", "Volts"]) {
+      for (const [index,name] of [...result.inputs, "OUT", "Volts"].entries()) {
         const cell=document.createElement("th");
-        if(name==='Volts')setText(cell,name);else cell.textContent=name;
+        if(index===result.inputs.length+1)setText(cell,name);else cell.textContent=name;
         head.append(cell);
       }
       const body = grid.createTBody();
