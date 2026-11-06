@@ -959,7 +959,11 @@ export function createLogicConverter(host: HTMLElement, comp: SchComponent, onCl
       setText(expression, `OUT = ${minimize(result.inputs, result.outputs)}`);
       const grid = document.createElement("table");
       const head = grid.createTHead().insertRow();
-      for (const name of [...result.inputs, "OUT", "Volts"]) appendLocalized(head, Object.assign(document.createElement("th"), { textContent: name }));
+      for (const [index,name] of [...result.inputs, "OUT", "Volts"].entries()) {
+        const cell=document.createElement("th");
+        if(index===result.inputs.length+1)setText(cell,name);else cell.textContent=name;
+        head.append(cell);
+      }
       const body = grid.createTBody();
       result.outputs.forEach((value, row) => {
         const tr = body.insertRow();
@@ -968,7 +972,11 @@ export function createLogicConverter(host: HTMLElement, comp: SchComponent, onCl
         setText(tr.insertCell(), formatSI(result.volts[row], "V"));
       });
       appendLocalized(table, grid);
-      if (result.outputs.includes(undefined)) table.prepend(Object.assign(document.createElement("p"), { className: "muted", textContent: "? marks an output between the logic thresholds; the expression treats it as don't-care." }));
+      if (result.outputs.includes(undefined)) {
+        const note=document.createElement("p");
+        bindProperties(note,{className:"muted",textContent:"? marks an output between the logic thresholds; the expression treats it as don't-care."});
+        table.prepend(note);
+      }
     } catch (error) {
       setText(expression, "");
       setText(table, error instanceof Error ? error.message : String(error));
@@ -1024,7 +1032,9 @@ export function createDistortionAnalyzer(host: HTMLElement, comp: SchComponent, 
       setText(detail, `Fundamental ${formatSI(fundamental, "Hz")}${given ? " (set)" : " (measured)"}, ${formatSI(result.rows[0].magnitude, "V")} peak. Harmonics 2 to ${harmonics}, over the last whole period.`);
       const grid = document.createElement("table");
       const head = grid.createTHead().insertRow();
-      for (const name of ["Harmonic", "Frequency", "Amplitude", "Relative"]) appendLocalized(head, Object.assign(document.createElement("th"), { textContent: name }));
+      for (const name of ["Harmonic", "Frequency", "Amplitude", "Relative"]) {
+        const cell=document.createElement("th");setText(cell,name);head.append(cell);
+      }
       const body = grid.createTBody();
       const base = result.rows[0].magnitude || 1;
       for (const row of result.rows) {
