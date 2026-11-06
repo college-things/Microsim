@@ -15,6 +15,44 @@ export type AnalysisRequest =
   /** Poles and zeros of v(output[0], output[1]) / input, linearised at the operating point. */
   | { type: "polezero"; input: [string, string]; output: [string, string] };
 
+// Higher-level requests are orchestrated in the worker using the base engine requests above.
+export type SweepAxis =
+  | { kind: "parameter"; refDes: string; param: string; values: number[] }
+  | { kind: "temperature"; values: number[] };
+
+export interface ToleranceOptions {
+  defaultTolerance: number;
+  /** Percent by reference designator; overrides the part's params.tolerance and the default. */
+  tolerances?: Record<string, number>;
+}
+export interface MonteCarloOptions extends ToleranceOptions {
+  runs: number;
+  distribution: "uniform" | "gaussian";
+  seed: number;
+}
+
+export type MeasurementKind = "at" | "max" | "min" | "peakToPeak" | "rms" | "average" | "riseTime" | "bandwidth" | "gain";
+export interface Measurement {
+  kind: MeasurementKind;
+  vector: string;
+  /** Time or frequency for at/gain. Gain is output magnitude / input magnitude, in V/V. */
+  at?: number;
+  input?: string;
+}
+
+/** Saved plans contain settings only; every run uses the current circuit. */
+export type AnalysisPlan =
+  | AnalysisRequest
+  | { type: "sweep"; axes: SweepAxis[]; request: AnalysisRequest; measurement: Measurement }
+  | { type: "montecarlo"; options: MonteCarloOptions; request: AnalysisRequest; measurement: Measurement }
+  | { type: "worstcase"; options: ToleranceOptions; request: AnalysisRequest; measurement: Measurement }
+  | { type: "distortion"; request: Extract<AnalysisRequest, { type: "tran" }>; vector: string; fundamental: number; harmonics: number }
+  | { type: "imd"; request: Extract<AnalysisRequest, { type: "tran" }>; vector: string; f1: number; f2: number; start: number }
+  | { type: "noisefigure"; request: Extract<AnalysisRequest, { type: "noise" }>; sourceResistance: number }
+  | { type: "batch"; entries: BatchEntry[] };
+
+export interface BatchEntry { label: string; request: Exclude<AnalysisPlan, { type: "batch" }> }
+
 /** Results of a "noise" analysis. Vectors hold spectral density per root hertz. */
 export interface NoiseSummary {
   /** Output noise integrated over the sweep: V rms, or A rms for an i() output. */
