@@ -1,30 +1,57 @@
-import {checkBoard,padPosition,validateWorkspace,type Board} from './engineering';
+import {checkBoard,validateWorkspace,type Board} from './engineering';
 import type {Point} from './schematic';
-/** Two copper layers, soldermask openings, board profile and plated NC drills. Units: mm. */
+import {boardPads, padDrill, padSize, transform} from './pcb-geometry';
+import {boardSilkscreen} from './pcb-silk';
+/** RS-274X millimetres, six fractional digits. Apertures are declared before any drawing. */
 export function boardFabricationFiles(board:Board):Record<string,string>{
  validateWorkspace({board});
- const errors=checkBoard(board);if(errors.length)throw new Error(`Fix PCB checks before fabrication export:\n${errors.join('\n')}`);
- const pads=[...board.footprints.flatMap(f=>f.pads.map(p=>({...padPosition(f,p),diameter:p.diameter??1.6,drill:p.drill??0.8}))),...(board.vias??[])];
+ const errors=checkBoard(board).filter(s=>!s.startsWith('Warning:'));if(errors.length)throw new Error(`Fix PCB checks before fabrication export:\n${errors.join('\n')}`);
+ if(board.width>=10000||board.height>=10000)throw new Error('Gerber export requires board dimensions below 10000 mm.');
+ const pads=boardPads(board);
  const position=(p:Point)=>`X${Math.round(p.x*1e6)}Y${Math.round((board.height-p.y)*1e6)}`;
- const gerber=(kind:'F.Cu'|'B.Cu'|'F.Mask'|'B.Mask'|'Edge.Cuts')=>{
-  const mask=kind.endsWith('Mask'),outline=kind==='Edge.Cuts';
-  const tracks=board.tracks.filter(t=>t.layer===kind);
-  const widths=[...new Set(outline?[0.05]:[...pads.map(p=>p.diameter+(mask?0.1:0)),...tracks.map(t=>t.width)])];
-  const aperture=(width:number)=>`D${widths.indexOf(width)+10}*`;
-  const fileFunction=outline?'Profile,NP':mask?`Soldermask,${kind[0]==='F'?'Top':'Bot'}`:`Copper,${kind[0]==='F'?'L1,Top':'L2,Bot'}`;
-  const lines=['G04 Microsim PCB export*','%FSLAX46Y46*%','%MOMM*%',`%TF.FileFunction,${fileFunction}*%`,`%TF.FilePolarity,${mask?'Negative':'Positive'}*%`,'%LPD*%',...widths.map((w,i)=>`%ADD${10+i}C,${w.toFixed(6)}*%`),'G01*'];
-  if(outline){lines.push(aperture(0.05));const corners=[{x:0,y:0},{x:board.width,y:0},{x:board.width,y:board.height},{x:0,y:board.height},{x:0,y:0}];corners.forEach((p,i)=>lines.push(position(p)+(i?'D01*':'D02*')));}
+ const gerber=(kind:'F.Cu'|'B.Cu'|'F.Mask'|'B.Mask'|'F.Paste'|'F.SilkS'|'Edge.Cuts')=>{
+  const mask=kind.endsWith('Mask'),outline=kind==='Edge.Cuts',paste=kind==='F.Paste',silk=kind==='F.SilkS',layer=kind[0]==='F'?'F.Cu':'B.Cu';
+  const declarations:string[]=[],macros:string[]=[],commands:string[]=[],ids=new Map<string,number>();
+  const define=(key:string,body:(id:number)=>string)=>{let id=ids.get(key);if(id===undefined){id=10+ids.size;ids.set(key,id);declarations.push(body(id));}commands.push(`D${id}*`);};
+  const circle=(d:number)=>define(`C${d}`,id=>`%ADD${id}C,${d.toFixed(6)}*%`);
+  const pad=(q:typeof pads[number],expand=0)=>{
+   const size=padSize(q.p),w=size.x+2*expand,h=size.y+2*expand,shape=q.p.shape??'circle',angle=-q.f.rotation;
+   const quarter=Math.abs(angle/90-Math.round(angle/90))<1e-8,swap=Math.abs(Math.round(angle/90)%2)===1;
+   if(shape==='circle')circle(w);
+   else if((shape==='rect'||shape==='oval')&&quarter)define(`${shape}${swap?h:w},${swap?w:h}`,id=>`%ADD${id}${shape==='rect'?'R':'O'},${(swap?h:w).toFixed(6)}X${(swap?w:h).toFixed(6)}*%`);
+   else define(`${shape}${w},${h},${angle}`,id=>{
+    const name=`PAD${id}`,r=shape==='rect'?0:shape==='oval'?Math.min(w,h)/2:Math.min(size.x,size.y)*0.25+expand;
+    const primitives:string[]=[];
+    if(w-2*r>0)primitives.push(`21,1,${(w-2*r).toFixed(6)},${h.toFixed(6)},0,0,${angle.toFixed(6)}*`);
+    if(h-2*r>0)primitives.push(`21,1,${w.toFixed(6)},${(h-2*r).toFixed(6)},0,0,${angle.toFixed(6)}*`);
+    if(r>0)for(const x of [-w/2+r,w/2-r])for(const y of [-h/2+r,h/2-r]){const p=transform({x:0,y:0,rotation:angle},{x,y});primitives.push(`1,1,${(2*r).toFixed(6)},${p.x.toFixed(6)},${p.y.toFixed(6)},0*`);}
+    macros.push(`%AM${name}*${primitives.join('')}%`);return `%ADD${id}${name}*%`;
+   });
+   commands.push(position(q.at)+'D03*');
+  };
+  const stroke=(points:Point[],w:number)=>{circle(w);points.forEach((p,i)=>commands.push(position(p)+(i?'D01*':'D02*')));};
+  const region=(points:Point[])=>{circle(0.01);commands.push('G36*');[...points,points[0]].forEach((p,i)=>commands.push(position(p)+(i?'D01*':'D02*')));commands.push('G37*');};
+  if(outline)stroke([{x:0,y:0},{x:board.width,y:0},{x:board.width,y:board.height},{x:0,y:board.height},{x:0,y:0}],0.05);
+  else if(silk)for(const s of boardSilkscreen(board))stroke([s.a,s.b],s.width);
   else{
-   for(const p of pads)lines.push(aperture(p.diameter+(mask?0.1:0)),position(p)+'D03*');
-   for(const t of tracks){lines.push(aperture(t.width));t.points.forEach((p,i)=>lines.push(position(p)+(i?'D01*':'D02*')));}
+   if(!mask&&!paste)for(const z of (board.zones??[]).filter(z=>z.layer===kind)){
+    commands.push('%LPD*%');region(z.outline);commands.push('%LPC*%');
+    for(const p of pads)if(p.net!==z.net&&p.layers.includes(layer))pad(p,board.clearance);
+    for(const t of board.tracks)if(t.net!==z.net&&t.layer===layer)stroke(t.points,t.width+2*board.clearance);
+    for(const k of board.keepouts??[])if(k.layer===layer||k.layer==='both'){region(k.outline);stroke([...k.outline,k.outline[0]],board.clearance*2);}
+    commands.push('%LPD*%');
+   }
+   for(const p of pads)if(p.layers.includes(layer)&&(!paste||padDrill(p.p)===undefined))pad(p,mask?0.05:0);
+   if(!mask&&!paste)for(const t of board.tracks.filter(t=>t.layer===kind))stroke(t.points,t.width);
   }
-  return lines.concat('M02*','').join('\n');
+  const fileFunction=outline?'Profile,NP':silk?'Legend,Top':paste?'Paste,Top':mask?`Soldermask,${kind[0]==='F'?'Top':'Bot'}`:`Copper,${kind[0]==='F'?'L1,Top':'L2,Bot'}`;
+  return ['G04 Microsim PCB export*','%FSLAX46Y46*%','%MOMM*%',`%TF.FileFunction,${fileFunction}*%`,`%TF.FilePolarity,${mask?'Negative':'Positive'}*%`,...macros,...declarations,'%LPD*%','G01*',...commands,'M02*',''].join('\n');
  };
- const drills=[...new Set(pads.map(p=>p.drill))].sort((a,b)=>a-b);
+ const drilled=pads.filter(p=>padDrill(p.p)!==undefined),drills=[...new Set(drilled.map(p=>padDrill(p.p)!))].sort((a,b)=>a-b);
  const drill=['M48',';FILE_FORMAT=4:6',';TYPE=PLATED','METRIC,LZ','G90',...drills.map((d,i)=>`T${i+1}C${d.toFixed(6)}`),'%','G05'];
- drills.forEach((d,i)=>{drill.push(`T${i+1}`);for(const p of pads.filter(p=>p.drill===d))drill.push(`X${p.x.toFixed(6)}Y${(board.height-p.y).toFixed(6)}`);});
+ drills.forEach((d,i)=>{drill.push(`T${i+1}`);for(const p of drilled.filter(p=>padDrill(p.p)===d))drill.push(`X${p.at.x.toFixed(6)}Y${(board.height-p.at.y).toFixed(6)}`);});
  drill.push('M30','');
- return {'front-copper.gtl':gerber('F.Cu'),'back-copper.gbl':gerber('B.Cu'),'front-mask.gts':gerber('F.Mask'),'back-mask.gbs':gerber('B.Mask'),'outline.gko':gerber('Edge.Cuts'),'plated-drills.drl':drill.join('\n'),'README.txt':'Two-layer plated through-hole board. Coordinates and drills use millimetres. Mask openings expand copper diameter by 0.10 mm. Verify the complete set in an independent Gerber viewer and match every footprint to its physical component before ordering.\n'};
+ return {'front-copper.gtl':gerber('F.Cu'),'back-copper.gbl':gerber('B.Cu'),'front-mask.gts':gerber('F.Mask'),'back-mask.gbs':gerber('B.Mask'),'front-paste.gtp':gerber('F.Paste'),'front-silkscreen.gto':gerber('F.SilkS'),'outline.gko':gerber('Edge.Cuts'),'plated-drills.drl':drill.join('\n'),'README.txt':'Two-layer board; units mm. Top SMD paste, mask openings expanded by 0.05 mm per side. Plated drills exclude SMD pads. Pours join their net directly; floating islands are retained. Check warnings, real package/pinout and the complete set in an independent viewer before ordering.\n'};
 }
 /** Uncompressed ZIP, with CRC32, for one browser download containing the fabrication set. */
 export function fabricationZip(files:Record<string,string>):Uint8Array{

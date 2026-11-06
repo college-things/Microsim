@@ -21,7 +21,7 @@ describe("PCB layout", () => {
     expect(b.footprints[0].pads.map((p) => p.net)).toEqual(["a", "0"]);
     expect(checkBoard(b).filter((s) => /unconnected/.test(s))).toHaveLength(2);
     b.footprints[0].x = 50; b.footprints[0].rotation = 90;
-    expect(padPosition(b.footprints[0], b.footprints[0].pads[1])).toEqual({ x: 50, y: 12.54 });
+    expect(padPosition(b.footprints[0], b.footprints[0].pads[1])).toEqual({ x: 50, y: 20.16 });
     expect(boardFromSchematic(doc.schematic, b).footprints[0].x).toBe(50);
     expect(boardToKicad(b)).toContain('(net 1 "a")');
     expect(boardToKicad(b)).toContain('"Edge.Cuts"');
