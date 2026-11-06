@@ -95,7 +95,7 @@ These are planned, in this order. Until they land, the app can't do them.
    - logic analyzer trigger and voltage-following lanes
    - network analyzer, frequency counter, word generator, logic converter and distortion analyzer
 10. **Analyses:** distortion, worst case, fuller Monte Carlo, nested and list sweeps, sensitivity, noise figure, batched and user-defined.
-11. **Reports and checks:** electrical rules check, bill of materials and KiCad netlist.
+11. **Reports and checks:** the Reports menu provides a bill of materials (CSV/HTML), electrical rules check, and SPICE/KiCad netlist export. Footprints appear only when explicitly supplied. Output conflicts are checked for the built-in logic gates, flip-flop, clock and serial transmitter; custom model pin directions and program-dependent MCU GPIO directions are not inferred. KiCad import still needs verification in KiCad.
 12. **Sheets and documents:**
     - Spreadsheet View, comments, shapes and description box
     - hierarchical blocks, pages and subcircuits

@@ -39,7 +39,7 @@ Microsim will not be a 1:1 copy of Multisim. NI's component collection, LabVIEW 
 
 In order of how often Multisim users need them:
 
-1. [ ] Reports: bill of materials, electrical rules check, netlist export.
+1. [x] Reports: bill of materials, electrical rules check, netlist export.
 2. [ ] Printing and PDF export of the schematic with a title block.
 3. [ ] Hierarchical blocks, subcircuits and multi-page designs.
 4. [ ] Analyses: parameter, temperature and nested sweeps; Monte Carlo and worst case; Fourier and distortion.
