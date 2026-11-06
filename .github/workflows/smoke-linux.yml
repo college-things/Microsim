@@ -38,7 +38,9 @@ jobs:
           microsim > launch.log 2>&1 &
           pid=$!
           sleep 15
-          win=$(xdotool search --onlyvisible --pid "$pid" --name '^Microsim$' | head -1)
+          # GTK can create an unmapped toplevel on the virtual display. Map it explicitly.
+          xwininfo -root -tree >> launch.log
+          win=$(xdotool search --name '^Microsim$' | head -1)
           test -n "$win"
           xdotool windowmap --sync "$win"
           xdotool windowsize "$win" 1320 840 windowmove "$win" 20 20
