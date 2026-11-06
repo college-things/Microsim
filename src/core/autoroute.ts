@@ -32,24 +32,31 @@ export function autoroute(input:Board,options:RouteOptions={},progress?:(p:Route
  const retries=Math.max(0,Math.min(3,options.retries??2));
  for(let attempt=0;attempt<=retries;attempt++){
   const board=structuredClone(initial),unrouted:string[]=[],failed=new Set<string>();let complete=0;
+  let obstacleCache:{net:string;blocked:Uint8Array;viaBlocked:Uint8Array}|undefined;
   const ordered=[...tasks].sort((a,b)=>Number(priority.has(b.net))-Number(priority.has(a.net)));
   for(const task of ordered){
    progress?.({completed:complete++,total:tasks.length,attempt:attempt+1});
    const fail=()=>{failed.add(task.net);unrouted.push(`${task.net}: ${task.a.name} to ${task.b.name}`);};
    if(performance.now()-start>maxMs){fail();continue;}
+   const margin=step*0.72+0.001;
+   // Routes added for the current net cannot obstruct its next connection. Reuse the
+   // raster until switching nets; a later net must include all newly routed copper.
+   if(obstacleCache?.net!==task.net){
    const blocked=new Uint8Array(area*2),viaBlocked=new Uint8Array(area*2),segments=boardSegments(board);
    const obstacles:{shape:CopperShape;layers:number[]}[]=[...pads.filter(p=>p.net!==task.net).map(p=>({shape:p.shape,layers:p.layers.map(l=>l==='F.Cu'?0:1)})),...segments.filter(s=>s.net!==task.net).map(s=>({shape:s.shape,layers:[s.layer==='F.Cu'?0:1]})),...(board.vias??[]).filter(v=>v.net!==task.net).map(v=>({shape:lineShape(v,v,v.diameter),layers:[0,1]}))];
    const paint=(shape:CopperShape,layers:number[],extra:number,target:Uint8Array)=>{
     const r=shape.radius+extra,minX=Math.max(0,Math.floor((Math.min(...shape.core.map(p=>p.x))-r)/step)),maxX=Math.min(nx-1,Math.ceil((Math.max(...shape.core.map(p=>p.x))+r)/step)),minY=Math.max(0,Math.floor((Math.min(...shape.core.map(p=>p.y))-r)/step)),maxY=Math.min(ny-1,Math.ceil((Math.max(...shape.core.map(p=>p.y))+r)/step));
     for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++){const p={x:x*step,y:y*step};if(shapeDistance(lineShape(p,p),shape)<extra)for(const layer of layers)target[layer*area+y*nx+x]=1;}
    };
-   const margin=step*0.72+0.001;
    for(const o of obstacles){paint(o.shape,o.layers,board.clearance+width/2+margin,blocked);paint(o.shape,o.layers,board.clearance+0.4+margin,viaBlocked);}
    for(const k of board.keepouts??[]){const layers=k.layer==='both'?[0,1]:[k.layer==='F.Cu'?0:1];
     const minX=Math.max(0,Math.floor(Math.min(...k.outline.map(p=>p.x))/step)),maxX=Math.min(nx-1,Math.ceil(Math.max(...k.outline.map(p=>p.x))/step)),minY=Math.max(0,Math.floor(Math.min(...k.outline.map(p=>p.y))/step)),maxY=Math.min(ny-1,Math.ceil(Math.max(...k.outline.map(p=>p.y))/step));
     for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++)if(inside({x:x*step,y:y*step},k.outline))for(const l of layers){blocked[l*area+y*nx+x]=1;viaBlocked[l*area+y*nx+x]=1;}
     k.outline.forEach((p,i)=>{const shape=lineShape(p,k.outline[(i+1)%k.outline.length]);paint(shape,layers,board.clearance+width/2+margin,blocked);paint(shape,layers,board.clearance+0.4+margin,viaBlocked);});
    }
+   obstacleCache={net:task.net,blocked,viaBlocked};
+   }
+   const {blocked,viaBlocked}=obstacleCache;
    const edge=board.clearance+width/2+margin,viaEdge=board.clearance+0.4+margin;
    const at=(p:Point)=>Math.round(p.y/step)*nx+Math.round(p.x/step),goal=at(task.b.at),source=at(task.a.at);
    const point=(n:number):Point=>({x:n%area%nx*step,y:Math.floor(n%area/nx)*step});
