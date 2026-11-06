@@ -1,0 +1,59 @@
+name: Linux smoke test
+
+# Builds and installs the Linux .deb, starts the app on a virtual display, opens the first example from
+# its menu, runs it with F5, checks the process is still alive, and keeps screenshots. Run by hand.
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Build dependencies and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb imagemagick xdotool
+      - run: npm ci
+      - run: npx tauri build --bundles deb
+      - name: Launch, open an example and run it
+        run: |
+          sudo dpkg -i src-tauri/target/release/bundle/deb/*.deb || sudo apt-get -f install -y
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1440x900x24 &
+          sleep 3
+          microsim > launch.log 2>&1 &
+          pid=$!
+          sleep 15
+          import -window root launched.png
+          # The window title is Microsim; drive its menus with the keyboard-free xdotool search.
+          win=$(xdotool search --name '^Microsim$' | head -1)
+          echo "window: $win" >> launch.log
+          kill -0 "$pid"
+          # Open the Examples menu by clicking its position in the native menu bar, then the first example.
+          if [ -n "$win" ]; then
+            xdotool windowactivate --sync "$win" || true
+            xdotool mousemove --window "$win" 150 15 click 1 && sleep 1
+            import -window root menu.png
+            xdotool key Down Return && sleep 3
+            xdotool key F5 && sleep 10
+          fi
+          import -window root running.png
+          kill -0 "$pid"
+          kill "$pid"
+          cat launch.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-smoke
+          path: |
+            *.png
+            launch.log
