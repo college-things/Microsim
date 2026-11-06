@@ -17,8 +17,7 @@
   --ok: #2b8a3e;
   color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+:root[data-theme="dark"] {
     --bg: #15181c;
     --panel: #1d2126;
     --panel-2: #262b31;
@@ -37,13 +36,13 @@
     --ok: #69db7c;
     color-scheme: dark;
   }
-}
+
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; margin: 0; }
 body {
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: var(--ui-font-size, 13px)/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow: hidden;
   user-select: none;
 }
@@ -273,3 +272,39 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
 .debugger-line.code:hover { background: #8882; }
 .debugger-line.breakpoint { box-shadow: inset 4px 0 0 #e03131; background: #e0313122; }
 .debugger-line.current { background: #f2c94c55; }
+
+:root[data-theme="midnight"] {
+  --bg:#0b1020; --panel:#121a2d; --panel-2:#1b2740; --line:#394a68;
+  --text:#edf2ff; --muted:#a7b8d8; --accent:#86b7ff; --accent-text:#081b35;
+  --sheet:#090f1b; --sheet-dot:#32415c; --symbol:#a9cfff; --wire:#ff9d9d;
+  --danger:#ff9d9d; --warn:#ffd18b; --ok:#8ce8ad; color-scheme:dark;
+}
+:root[data-theme="contrast"] {
+  --bg:#000; --panel:#000; --panel-2:#171717; --line:#b8b8b8;
+  --text:#fff; --muted:#ddd; --accent:#7df9ff; --accent-text:#000;
+  --sheet:#000; --sheet-dot:#626262; --symbol:#7df9ff; --wire:#ffed75;
+  --danger:#ff9d9d; --warn:#ffed75; --ok:#a8ffb8; color-scheme:dark;
+}
+:root[data-theme="light"][data-accent="blue"] { --accent:#1d4ed8; --accent-text:#fff; }
+:root[data-theme="midnight"][data-accent="teal"] { --accent:#5eead4; --accent-text:#072c29; }
+:root[data-theme="light"][data-accent="violet"] { --accent:#6d28d9; --accent-text:#fff; }
+:root[data-theme="light"][data-accent="amber"] { --accent:#92400e; --accent-text:#fff; }
+:root:not([data-theme="light"])[data-accent="blue"] { --accent:#93c5fd; --accent-text:#071d3b; }
+:root:not([data-theme="light"])[data-accent="violet"] { --accent:#c4b5fd; --accent-text:#211147; }
+:root:not([data-theme="light"])[data-accent="amber"] { --accent:#fcd34d; --accent-text:#342300; }
+:root[data-reduced-motion="true"] *, :root[data-reduced-motion="true"] *::before, :root[data-reduced-motion="true"] *::after {
+  animation-duration:0.001ms !important; transition-duration:0.001ms !important; scroll-behavior:auto !important;
+}
+.settings-dialog { width:min(650px,95vw); }
+.settings-dialog fieldset { min-width:0; border:1px solid var(--line); border-radius:8px; margin:12px 0; padding:12px 14px; }
+.settings-dialog legend { padding:0 6px; font-weight:650; }
+.settings-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(150px,45%); align-items:center; gap:12px; margin:9px 0; }
+.settings-row select { width:100%; min-width:0; }
+.settings-check { display:flex; align-items:center; gap:9px; margin:10px 0; }
+.settings-check input { flex:none; accent-color:var(--accent); }
+.settings-dialog p { margin:8px 0; line-height:1.5; }
+.settings-actions { position:sticky; bottom:-14px; padding:12px 0; background:var(--panel); border-top:1px solid var(--line); flex-wrap:wrap; }
+.settings-actions button:first-child { margin-right:auto; }
+.pcb-board [role="button"] { cursor:crosshair; }
+.pcb-board [role="button"]:focus { stroke:white; stroke-width:0.5; outline:none; }
+@media (max-width:540px) { .settings-row {grid-template-columns:1fr;} .settings-actions {gap:5px;} }

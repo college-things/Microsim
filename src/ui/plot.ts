@@ -1,4 +1,5 @@
 // Small canvas plot with log axes, per-pixel decimation and a hover readout.
+import {t as translate} from './i18n';
 export interface Series {
   label: string;
   x: ArrayLike<number>;
@@ -222,7 +223,7 @@ export class Plot {
       ctx.translate(9, frame.top + ph / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.textAlign = "center";
-      ctx.fillText(options.yLabel, 0, 0);
+      ctx.fillText(translate(options.yLabel), 0, 0);
       ctx.restore();
     }
     ctx.textAlign = "center";
@@ -234,7 +235,7 @@ export class Plot {
       ctx.beginPath(); ctx.moveTo(x, frame.top); ctx.lineTo(x, h - frame.bottom); ctx.stroke();
       ctx.fillText(formatSI(t, "", xDigits), x, h - frame.bottom + 4);
     }
-    if (options.xLabel) ctx.fillText(options.xLabel, frame.left + pw / 2, h - 14);
+    if (options.xLabel) ctx.fillText(translate(options.xLabel), frame.left + pw / 2, h - 14);
 
     ctx.save();
     ctx.beginPath();

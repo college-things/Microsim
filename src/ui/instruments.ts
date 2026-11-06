@@ -1,3 +1,4 @@
+import { appendLocalized, bindAttribute, bindProperties, setText } from './i18n';
 // Floating instrument windows and how each one reads a finished simulation.
 import { acRms, findVector, fourier, settledMean, settledRms } from "../core/analyses";
 
@@ -252,16 +253,16 @@ export function floatingWindow(host: HTMLElement, title: string, width: number, 
   const bar = document.createElement("div");
   bar.className = "window-title";
   const name = document.createElement("span");
-  name.textContent = title;
+  setText(name, title);
   const close = document.createElement("button");
   close.className = "quiet";
-  close.textContent = "Close";
+  setText(close, "Close");
   close.onclick = () => { root.remove(); onClose(); };
-  bar.append(name, close);
+  appendLocalized(bar, name, close);
   const body = document.createElement("div");
   body.className = "window-body";
-  root.append(bar, body);
-  host.append(root);
+  appendLocalized(root, bar, body);
+  appendLocalized(host, root);
   watchHost(host);
   root.addEventListener("pointerdown", () => { root.style.zIndex = String(++topZ); });
   bar.addEventListener("pointerdown", (e) => {
@@ -279,7 +280,7 @@ export function floatingWindow(host: HTMLElement, title: string, width: number, 
   });
   // A drag across the panels would otherwise select their text.
   bar.addEventListener("mousedown", (e) => { if (e.target !== close) e.preventDefault(); });
-  return { root, body, setTitle: (t) => { name.textContent = t; } };
+  return { root, body, setTitle: (t) => { setText(name, t); } };
 }
 
 /** Voltage between two nets, or undefined when the positive pin is unconnected. */
@@ -309,7 +310,7 @@ export interface InstrumentView {
 function controls(parent: HTMLElement): HTMLElement {
   const row = document.createElement("div");
   row.className = "controls";
-  parent.append(row);
+  appendLocalized(parent, row);
   return row;
 }
 
@@ -318,8 +319,8 @@ function controlField(row: HTMLElement, label: string, value: string, apply: (te
   const input = document.createElement("input");
   input.value = value;
   input.onchange = () => apply(input.value);
-  wrap.append(label, " ", input);
-  row.append(wrap);
+  appendLocalized(wrap, label, " ", input);
+  appendLocalized(row, wrap);
   return input;
 }
 
@@ -338,8 +339,8 @@ function storedNote(stored: number, span: number, running: boolean): string {
 function message(plot: HTMLElement, text: string): HTMLElement {
   const note = document.createElement("div");
   note.className = "muted pad";
-  note.textContent = text;
-  plot.append(note);
+  setText(note, text);
+  appendLocalized(plot, note);
   return note;
 }
 
@@ -347,7 +348,7 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
   const win = floatingWindow(host, `Oscilloscope ${comp.refDes}`, 520, 340, onClose);
   if (comp.kind === "tektronix-scope") {
     win.root.classList.add("tektronix-panel");
-    const name = document.createElement("div"); name.className = "panel-badge"; name.textContent = "Tektronix style · simulated four-channel scope"; win.body.append(name);
+    const name = document.createElement("div"); name.className = "panel-badge"; setText(name, "Tektronix style · simulated four-channel scope"); appendLocalized(win.body, name);
   }
   const note = message(win.body, "Run the simulation to see traces.");
   const plot = new Plot(win.body);
@@ -382,10 +383,10 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
     extraFields.push(field(`${channel} V/div`,showScale(settings[key]??0,'V'),text=>{settings[key]=scale(text);onChange();if(last)draw(last);}));
   }
   const advanced=document.createElement('details');advanced.className='scope-options';
-  const summary=document.createElement('summary');summary.textContent='Coupling and trigger';advanced.append(summary);win.body.append(advanced);
+  const summary=document.createElement('summary');setText(summary, 'Coupling and trigger');appendLocalized(advanced, summary);appendLocalized(win.body, advanced);
   const advancedRow=controls(advanced);
   const select=(label:string,choices:string[],value:string,change:(value:string)=>void)=>{
-    const wrap=document.createElement('label');wrap.append(label+' ');const input=document.createElement('select');input.setAttribute('aria-label',label);for(const choice of choices){const option=document.createElement('option');option.value=choice;option.textContent=choice;input.append(option);}input.value=value;input.onchange=()=>{change(input.value);onChange();if(last)draw(last);};wrap.append(input);advancedRow.append(wrap);return input;
+    const wrap=document.createElement('label');appendLocalized(wrap, label+' ');const input=document.createElement('select');bindAttribute(input, 'aria-label', label);for(const choice of choices){const option=document.createElement('option');option.value=choice;setText(option, choice);appendLocalized(input, option);}input.value=value;input.onchange=()=>{change(input.value);onChange();if(last)draw(last);};appendLocalized(wrap, input);appendLocalized(advancedRow, wrap);return input;
   };
   for(const channel of channels)select(`${channel} coupling`,['DC','AC','GND'],settings.coupling?.[channel]??'DC',value=>{settings.coupling??={};settings.coupling[channel]=value as 'DC'|'AC'|'GND';});
   select('Trigger source',channels,settings.triggerSource??'A',value=>{settings.triggerSource=value as 'A'|'B'|'C'|'D';});
@@ -397,7 +398,7 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
   });
   const stats = document.createElement("span");
   stats.className = "muted";
-  row.append(stats);
+  appendLocalized(row, stats);
 
   function draw(run: RunData): void {
     setField(time, showScale(settings.timePerDiv, "s"));
@@ -406,7 +407,7 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
     extraFields.forEach((field,i)=>setField(field,showScale(i===0?settings.voltsPerDivC??0:settings.voltsPerDivD??0,'V')));
     setField(trigger, settings.triggerLevel === undefined ? "off" : formatSI(settings.triggerLevel, "V"));
     if (!run.tran?.axis) {
-      note.textContent = "Connect channel A or B and run the simulation.";
+      setText(note, "Connect channel A or B and run the simulation.");
       return;
     }
     const nets = run.pinNets.get(comp.id);
@@ -430,7 +431,7 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
       series.push({ label, x: axis, y: fixed ? wave.map((v) => v / unit) : wave, color, unit: "V", readoutScale: unit });
     };
     channels.forEach((channel,i)=>add(channel,waves[i],scales[i],['#d9480f','#1864ab','#087f5b','#862e9c'][i]));
-    note.textContent = series.length ? "" : "The scope channels are not connected to anything.";
+    setText(note, series.length ? "" : "The scope channels are not connected to anything.");
     note.style.display = series.length ? "none" : "";
     // The axis keeps to the time base, even with less than that to show.
     plot.set(series, {
@@ -441,7 +442,7 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
     let first = 0;
     while (first < axis.length - 1 && axis[first] < start) first++;
     const shown = axis.subarray(first);
-    stats.textContent = [...waves.map((wave,i)=>wave&&`${channels[i]} ${formatSI(settledRms(wave.subarray(first),shown),'V')} rms`),storedNote(end-axis[0],span,running())].filter(Boolean).join('   ');
+    setText(stats, [...waves.map((wave,i)=>wave&&`${channels[i]} ${formatSI(settledRms(wave.subarray(first),shown),'V')} rms`),storedNote(end-axis[0],span,running())].filter(Boolean).join('   '));
   }
 
   return {
@@ -457,9 +458,9 @@ export function createScope(host: HTMLElement, comp: SchComponent, settings: Sco
     clear() {
       last = undefined;
       plot.set([]);
-      stats.textContent = "";
+      setText(stats, "");
       note.style.display = "";
-      note.textContent = "The circuit changed. Run it to see traces.";
+      setText(note, "The circuit changed. Run it to see traces.");
     },
   };
 }
@@ -475,23 +476,23 @@ export function createMultimeter(host: HTMLElement, comp: SchComponent, onClose:
   const win = floatingWindow(host, `Multimeter ${comp.refDes}`, branded ? 360 : 300, branded ? 260 : 180, onClose);
   if (comp.kind === "agilent-multimeter") {
     win.root.classList.add("agilent-panel");
-    const name = document.createElement("div"); name.className = "panel-badge"; name.textContent = "Agilent style · simulated multimeter"; win.body.append(name);
+    const name = document.createElement("div"); name.className = "panel-badge"; setText(name, "Agilent style · simulated multimeter"); appendLocalized(win.body, name);
     const row = document.createElement("div"); row.className = "design-controls";
     for (const [label, mode, coupling] of [["DC V", "volts", "dc"], ["AC V", "volts", "ac"], ["DC A", "amps", "dc"], ["AC A", "amps", "ac"], ["Ω", "ohms", "dc"]]) {
-      const control = document.createElement("button"); control.textContent = label;
+      const control = document.createElement("button"); setText(control, label);
       control.disabled = !onConfigure;
       control.onclick = () => onConfigure?.(comp, { mode, coupling });
-      row.append(control);
+      appendLocalized(row, control);
     }
-    win.body.append(row);
+    appendLocalized(win.body, row);
   }
   const display = document.createElement("div");
   display.className = "readout";
-  display.textContent = "--";
+  setText(display, "--");
   const detail = document.createElement("div");
   detail.className = "muted pad";
-  detail.textContent = "Change the mode in Properties.";
-  win.body.append(display, detail);
+  setText(detail, "Change the mode in Properties.");
+  appendLocalized(win.body, display, detail);
   return {
     element: win.root,
     follow(part) {
@@ -502,33 +503,33 @@ export function createMultimeter(host: HTMLElement, comp: SchComponent, onClose:
       const nets = run.pinNets.get(comp.id);
       const mode = comp.params.mode;
       const ac = comp.params.coupling === "ac" && mode !== "ohms";
-      detail.textContent = `${mode === "ohms" ? "Resistance" : ac ? "AC RMS, settled part of the run" : "DC"}. Change the mode in Properties.`;
+      setText(detail, `${mode === "ohms" ? "Resistance" : ac ? "AC RMS, settled part of the run" : "DC"}. Change the mode in Properties.`);
       const axis = run.tran?.axis?.re;
       if (mode === "amps") {
         const name = `i(v${run.refs.get(comp.id) ?? comp.refDes})`;
         const wave = run.tran && findVector(run.tran, name);
         if (ac) {
-          display.textContent = wave && axis ? formatSI(acRms(wave.re, axis), "A") : "--";
+          setText(display, wave && axis ? formatSI(acRms(wave.re, axis), "A") : "--");
           return;
         }
         // While a circuit runs, DC follows it. Otherwise it's the operating point.
         if (wave && axis) {
-          display.textContent = formatSI(settledMean(wave.re, axis), "A");
+          setText(display, formatSI(settledMean(wave.re, axis), "A"));
           return;
         }
         const dc = run.op && findVector(run.op, name);
-        display.textContent = formatSI(dc?.re[0] ?? NaN, "A");
+        setText(display, formatSI(dc?.re[0] ?? NaN, "A"));
         return;
       }
       if (ac) {
         const wave = run.tran && differential(run.tran, nets, "p", "n");
-        display.textContent = wave && axis ? formatSI(acRms(wave, axis), "V") : "--";
+        setText(display, wave && axis ? formatSI(acRms(wave, axis), "V") : "--");
         return;
       }
       if (mode !== "ohms" && run.tran && axis) {
         const wave = differential(run.tran, nets, "p", "n");
         if (wave) {
-          display.textContent = formatSI(settledMean(wave, axis), "V");
+          setText(display, formatSI(settledMean(wave, axis), "V"));
           return;
         }
       }
@@ -540,15 +541,15 @@ export function createMultimeter(host: HTMLElement, comp: SchComponent, onClose:
       const plus = reading(nets?.get("p"));
       const minus = reading(nets?.get("n")) ?? 0;
       if (plus === undefined) {
-        display.textContent = "--";
+        setText(display, "--");
         return;
       }
       const volts = plus - minus;
-      display.textContent = mode === "ohms" ? formatSI(volts / 1e-3, "Ohm") : formatSI(volts, "V");
+      setText(display, mode === "ohms" ? formatSI(volts / 1e-3, "Ohm") : formatSI(volts, "V"));
     },
     clear() {
-      display.textContent = "--";
-      detail.textContent = "The circuit changed. Run it to measure.";
+      setText(display, "--");
+      setText(detail, "The circuit changed. Run it to measure.");
     },
   };
 }
@@ -557,11 +558,11 @@ export function createWattmeter(host: HTMLElement, comp: SchComponent, onClose: 
   const win = floatingWindow(host, `Wattmeter ${comp.refDes}`, 300, 180, onClose);
   const display = document.createElement("div");
   display.className = "readout";
-  display.textContent = "--";
+  setText(display, "--");
   const detail = document.createElement("div");
   detail.className = "muted pad";
-  detail.textContent = "Measures v+ to v-, with current flowing from i+ to i-.";
-  win.body.append(display, detail);
+  setText(detail, "Measures v+ to v-, with current flowing from i+ to i-.");
+  appendLocalized(win.body, display, detail);
   return {
     element: win.root,
     follow(part) {
@@ -574,7 +575,7 @@ export function createWattmeter(host: HTMLElement, comp: SchComponent, onClose: 
       const source = run.tran ?? run.op;
       const current = source && findVector(source, name);
       if (!source || !current || !nets?.get("v+")) {
-        display.textContent = "--";
+        setText(display, "--");
         return;
       }
       if (run.tran?.axis) {
@@ -582,17 +583,17 @@ export function createWattmeter(host: HTMLElement, comp: SchComponent, onClose: 
         const time = run.tran.axis.re;
         if (volts) {
           // Power repeats like any other signal, so it's read like one, over whole periods.
-          display.textContent = formatSI(settledMean(volts.map((v, i) => v * current.re[i]), time), "W");
-          detail.textContent = "Average power, settled part of the run.";
+          setText(display, formatSI(settledMean(volts.map((v, i) => v * current.re[i]), time), "W"));
+          setText(detail, "Average power, settled part of the run.");
         }
         return;
       }
       const read = (net: string | undefined) => (net && net !== "0" ? findVector(source, `v(${net})`)?.re[0] ?? 0 : 0);
-      display.textContent = formatSI((read(nets.get("v+")) - read(nets.get("v-"))) * current.re[0], "W");
+      setText(display, formatSI((read(nets.get("v+")) - read(nets.get("v-"))) * current.re[0], "W"));
     },
     clear() {
-      display.textContent = "--";
-      detail.textContent = "The circuit changed. Run it to measure.";
+      setText(display, "--");
+      setText(detail, "The circuit changed. Run it to measure.");
     },
   };
 }
@@ -611,7 +612,7 @@ export function createLogicAnalyzer(host: HTMLElement, comp: SchComponent, setti
   });
   const stats = document.createElement("span");
   stats.className = "muted";
-  row.append(stats);
+  appendLocalized(row, stats);
   return {
     element: win.root,
     follow(part) {
@@ -646,13 +647,13 @@ export function createLogicAnalyzer(host: HTMLElement, comp: SchComponent, setti
         xLabel: "Time (s)", xUnit: "s", xRange: [start, start + span],
         yRange: series.length ? [-(series.length - 1) * 1.2 - 0.1, 0.9] : undefined, yLanes: lanes,
       });
-      stats.textContent = storedNote(end - axis[0], span, running());
+      setText(stats, storedNote(end - axis[0], span, running()));
     },
     clear() {
       plot.set([]);
-      stats.textContent = "";
+      setText(stats, "");
       note.style.display = "";
-      note.textContent = "The circuit changed. Run it to see channels.";
+      setText(note, "The circuit changed. Run it to see channels.");
     },
   };
 }
@@ -679,7 +680,7 @@ export function createBode(host: HTMLElement, comp: SchComponent, onClose: () =>
       const ac = run.ac;
       if (!ac?.axis || !nets?.get("in+") || !nets.get("out+")) {
         note.style.display = "";
-        note.textContent = "Connect the IN and OUT pins, add an AC source, then run.";
+        setText(note, "Connect the IN and OUT pins, add an AC source, then run.");
         return;
       }
       const read = (name: string | undefined, i: number): [number, number] => {
@@ -709,7 +710,7 @@ export function createBode(host: HTMLElement, comp: SchComponent, onClose: () =>
         magnitude.set([]);
         phase.set([]);
         note.style.display = "";
-        note.textContent = "No AC signal reaches the IN pins, so there's no gain to plot. Add an AC source or a function generator.";
+        setText(note, "No AC signal reaches the IN pins, so there's no gain to plot. Add an AC source or a function generator.");
         return;
       }
       note.style.display = "none";
@@ -720,7 +721,7 @@ export function createBode(host: HTMLElement, comp: SchComponent, onClose: () =>
       magnitude.set([]);
       phase.set([]);
       note.style.display = "";
-      note.textContent = "The circuit changed. Run it to plot.";
+      setText(note, "The circuit changed. Run it to plot.");
     },
   };
 }
@@ -733,26 +734,27 @@ export function createBode(host: HTMLElement, comp: SchComponent, onClose: () =>
 export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onClose: () => void, send?: (bytes: number[]) => string | undefined): InstrumentView {
   const win = floatingWindow(host, `Serial terminal ${comp.refDes}`, 380, 340, onClose);
   const screen = document.createElement("pre");
+  screen.translate=false;
   screen.className = "serial-terminal";
   const detail = document.createElement("div");
   detail.className = "muted pad";
   const clearButton = document.createElement("button");
-  clearButton.textContent = "Clear";
+  setText(clearButton, "Clear");
   // Keys go out one at a time as they are typed, as on a real terminal; Enter sends the chosen line ending.
   const typing = document.createElement("div");
   typing.className = "serial-input";
   const input = document.createElement("input");
-  input.placeholder = "Type here to send on TX";
-  input.setAttribute("aria-label", `Send from serial terminal ${comp.refDes}`);
+  bindProperties(input, {placeholder: "Type here to send on TX"});
+  bindAttribute(input, "aria-label", `Send from serial terminal ${comp.refDes}`);
   input.autocomplete = "off";
   input.spellcheck = false;
   const ending = document.createElement("select");
-  ending.setAttribute("aria-label", "Enter sends");
+  bindAttribute(ending, "aria-label", "Enter sends");
   for (const [label, value] of [["Enter: CR", "\r"], ["Enter: LF", "\n"], ["Enter: CR LF", "\r\n"], ["Enter: nothing", ""]]) {
     const option = document.createElement("option");
-    option.textContent = label;
+    setText(option, label);
     option.value = value;
-    ending.append(option);
+    appendLocalized(ending, option);
   }
   const sentNote = document.createElement("div");
   sentNote.className = "muted pad";
@@ -762,9 +764,9 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
     const bytes = [...chars].map((ch) => (ch.charCodeAt(0) < 256 ? ch.charCodeAt(0) : 63));
     if (!bytes.length) return;
     const problem = send ? send(bytes) : "This terminal cannot send.";
-    if (problem) { sentNote.textContent = problem; return; }
+    if (problem) { setText(sentNote, problem); return; }
     sent += bytes.length;
-    sentNote.textContent = `Sent ${sent} byte${sent === 1 ? "" : "s"} on TX.`;
+    setText(sentNote, `Sent ${sent} byte${sent === 1 ? "" : "s"} on TX.`);
   };
   input.addEventListener("keydown", (event) => {
     event.stopPropagation(); // the sheet's own shortcuts must not see typing
@@ -785,25 +787,25 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
     event.preventDefault();
     transmit((event.clipboardData?.getData("text") ?? "").replace(/\r?\n/g, ending.value));
   });
-  typing.append(input, ending, clearButton);
-  win.body.append(screen, typing, sentNote, detail);
+  appendLocalized(typing, input, ending, clearButton);
+  appendLocalized(win.body, screen, typing, sentNote, detail);
   let text = "", resume = -Infinity, errors = 0, streamed = false;
   const lineState = { afterCr: false };
   // Samples not yet decoded, carried between live chunks so a frame split across two chunks is read whole.
   let tailTime: number[] = [], tailVolts: number[] = [];
-  const reset = () => { text = ""; resume = -Infinity; errors = 0; streamed = false; tailTime = []; tailVolts = []; screen.textContent = ""; };
-  clearButton.onclick = () => { text = ""; errors = 0; screen.textContent = ""; };
+  const reset = () => { text = ""; resume = -Infinity; errors = 0; streamed = false; tailTime = []; tailVolts = []; setText(screen, ""); };
+  clearButton.onclick = () => { text = ""; errors = 0; setText(screen, ""); };
   const settings = () => ({ baud: readValue(comp.params.baud ?? "9600") ?? 0, threshold: readValue(comp.params.threshold ?? "2.5") ?? 2.5, parity: (comp.params.parity as "none" | "even" | "odd") ?? "none" });
   const describe = () => `${settings().baud || "?"} baud, 8 data bits, ${comp.params.parity ?? "none"} parity, 1 stop bit, idle high.`;
-  detail.textContent = describe();
+  setText(detail, describe());
   const show = (decoded: ReturnType<typeof decodeUart>) => {
     resume = decoded.resume;
     if (decoded.gap && text) text += "\n[samples missed: decoding resynchronized]\n";
     errors += decoded.bytes.filter((b) => b.error).length;
     text += terminalText(decoded.bytes, lineState);
     if (text.length > 20000) text = text.slice(-20000);
-    if (screen.textContent !== text) { screen.textContent = text; screen.scrollTop = screen.scrollHeight; }
-    detail.textContent = describe() + (errors ? ` ${errors} frame error${errors === 1 ? "" : "s"} (shown as �).` : "");
+    if (screen.textContent !== text) { setText(screen, text); screen.scrollTop = screen.scrollHeight; }
+    setText(detail, describe() + (errors ? ` ${errors} frame error${errors === 1 ? "" : "s"} (shown as �).` : ""));
   };
   const rxNet = (run: RunData) => run.pinNets.get(comp.id)?.get("RX") ?? run.pinNets.get(comp.id)?.get("RXD");
   return {
@@ -837,7 +839,7 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
       const time = run.tran?.axis?.re;
       const volts = net && net !== "0" && run.tran ? findVector(run.tran, `v(${net})`)?.re : undefined;
       if (!time || !volts || !(s.baud > 0)) {
-        detail.textContent = !(s.baud > 0) ? "Set a positive baud rate." : net ? "Needs a transient run to decode." : "Connect RX to a signal.";
+        setText(detail, !(s.baud > 0) ? "Set a positive baud rate." : net ? "Needs a transient run to decode." : "Connect RX to a signal.");
         return;
       }
       reset();
@@ -845,7 +847,7 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
     },
     clear() {
       reset();
-      detail.textContent = "The circuit changed. Run it to receive.";
+      setText(detail, "The circuit changed. Run it to receive.");
     },
   };
 }
@@ -863,11 +865,11 @@ export function createFrequencyCounter(host: HTMLElement, comp: SchComponent, on
   const win = floatingWindow(host, `Frequency counter ${comp.refDes}`, 300, 220, onClose);
   const display = document.createElement("div");
   display.className = "readout";
-  display.textContent = "--";
+  setText(display, "--");
   const detail = document.createElement("div");
   detail.className = "muted pad";
-  detail.textContent = "Connect IN and run the circuit.";
-  win.body.append(display, detail);
+  setText(detail, "Connect IN and run the circuit.");
+  appendLocalized(win.body, display, detail);
   return {
     element: win.root,
     follow(part) {
@@ -876,16 +878,16 @@ export function createFrequencyCounter(host: HTMLElement, comp: SchComponent, on
     },
     update(run) {
       const wave = inputWave(run, comp);
-      if (!wave) { display.textContent = "--"; detail.textContent = run.tran ? "Connect IN to a signal." : "Needs a transient run."; return; }
+      if (!wave) { setText(display, "--"); setText(detail, run.tran ? "Connect IN to a signal." : "Needs a transient run."); return; }
       const level = comp.params.threshold?.trim() ? readValue(comp.params.threshold) : undefined;
       const reading = countFrequency(wave.time, wave.volts, level);
-      if (!reading) { display.textContent = "--"; detail.textContent = "No steady signal yet: it needs at least two whole periods, in the later half of the stored run."; return; }
-      display.textContent = formatSI(reading.frequency, "Hz");
-      detail.textContent = `Period ${formatSI(reading.period, "s")}, high ${formatSI(reading.highTime, "s")}, low ${formatSI(reading.lowTime, "s")}, duty ${(reading.duty * 100).toFixed(1)}%. ${formatSI(reading.peakToPeak, "V")} peak to peak, triggered at ${formatSI(reading.threshold, "V")}, averaged over ${reading.cycles} periods.`;
+      if (!reading) { setText(display, "--"); setText(detail, "No steady signal yet: it needs at least two whole periods, in the later half of the stored run."); return; }
+      setText(display, formatSI(reading.frequency, "Hz"));
+      setText(detail, `Period ${formatSI(reading.period, "s")}, high ${formatSI(reading.highTime, "s")}, low ${formatSI(reading.lowTime, "s")}, duty ${(reading.duty * 100).toFixed(1)}%. ${formatSI(reading.peakToPeak, "V")} peak to peak, triggered at ${formatSI(reading.threshold, "V")}, averaged over ${reading.cycles} periods.`);
     },
     clear() {
-      display.textContent = "--";
-      detail.textContent = "The circuit changed. Run it to measure.";
+      setText(display, "--");
+      setText(detail, "The circuit changed. Run it to measure.");
     },
   };
 }
@@ -896,7 +898,7 @@ export function createSpectrumAnalyzer(host: HTMLElement, comp: SchComponent, on
   const plot = new Plot(win.body);
   const detail = document.createElement("div");
   detail.className = "muted pad";
-  win.body.append(detail);
+  appendLocalized(win.body, detail);
   return {
     element: win.root,
     follow(part) {
@@ -906,7 +908,7 @@ export function createSpectrumAnalyzer(host: HTMLElement, comp: SchComponent, on
     update(run) {
       const wave = inputWave(run, comp);
       const result = wave && spectrum(wave.time, wave.volts, 8192);
-      if (!result) { plot.set([]); note.style.display = ""; note.textContent = run.tran ? "Connect IN to a signal." : "Needs a transient run."; detail.textContent = ""; return; }
+      if (!result) { plot.set([]); note.style.display = ""; setText(note, run.tran ? "Connect IN to a signal." : "Needs a transient run."); setText(detail, ""); return; }
       note.style.display = "none";
       const fmax = comp.params.fmax?.trim() ? readValue(comp.params.fmax) : undefined;
       let bins = result.frequency.length;
@@ -918,13 +920,13 @@ export function createSpectrumAnalyzer(host: HTMLElement, comp: SchComponent, on
         xLabel: "Frequency (Hz)", xUnit: "Hz", yLabel: decibels ? "dBV (peak)" : "Volts (peak)",
         yRange: decibels ? [Math.max(-160, Math.min(...Array.from(y)) ), Math.max(...Array.from(y)) + 6] : undefined,
       });
-      detail.textContent = `Peak ${formatSI(result.peak.amplitude, "V")} at ${formatSI(result.peak.frequency, "Hz")}. Resolution ${formatSI(result.resolution, "Hz")}, from the last ${formatSI(1 / result.resolution, "s")} of the run with a Hann window.`;
+      setText(detail, `Peak ${formatSI(result.peak.amplitude, "V")} at ${formatSI(result.peak.frequency, "Hz")}. Resolution ${formatSI(result.resolution, "Hz")}, from the last ${formatSI(1 / result.resolution, "s")} of the run with a Hann window.`);
     },
     clear() {
       plot.set([]);
       note.style.display = "";
-      note.textContent = "The circuit changed. Run it to see the spectrum.";
-      detail.textContent = "";
+      setText(note, "The circuit changed. Run it to see the spectrum.");
+      setText(detail, "");
     },
   };
 }
@@ -937,43 +939,43 @@ export function createLogicConverter(host: HTMLElement, comp: SchComponent, onCl
   const win = floatingWindow(host, `Logic converter ${comp.refDes}`, 420, 420, onClose);
   const intro = document.createElement("div");
   intro.className = "muted pad";
-  intro.textContent = "Wire A to H to the circuit's inputs and OUT to its output, then read the truth table. Each row is an operating point with the inputs driven to 0 V or logic high.";
+  setText(intro, "Wire A to H to the circuit's inputs and OUT to its output, then read the truth table. Each row is an operating point with the inputs driven to 0 V or logic high.");
   const read = document.createElement("button");
-  read.textContent = "Read truth table";
+  setText(read, "Read truth table");
   const expression = document.createElement("div");
   expression.className = "readout logic-expression";
   const table = document.createElement("div");
   table.className = "logic-table";
-  win.body.append(intro, read, expression, table);
+  appendLocalized(win.body, intro, read, expression, table);
   let busy = false;
   read.onclick = async () => {
     if (busy) return;
     busy = true;
     read.disabled = true;
-    expression.textContent = "";
+    setText(expression, "");
     table.replaceChildren();
     try {
-      const result = await convert((done, total) => { read.textContent = `Reading ${done} of ${total}...`; });
-      expression.textContent = `OUT = ${minimize(result.inputs, result.outputs)}`;
+      const result = await convert((done, total) => { setText(read, `Reading ${done} of ${total}...`); });
+      setText(expression, `OUT = ${minimize(result.inputs, result.outputs)}`);
       const grid = document.createElement("table");
       const head = grid.createTHead().insertRow();
-      for (const name of [...result.inputs, "OUT", "Volts"]) head.append(Object.assign(document.createElement("th"), { textContent: name }));
+      for (const name of [...result.inputs, "OUT", "Volts"]) appendLocalized(head, Object.assign(document.createElement("th"), { textContent: name }));
       const body = grid.createTBody();
       result.outputs.forEach((value, row) => {
         const tr = body.insertRow();
-        result.inputs.forEach((_, i) => { tr.insertCell().textContent = String((row >> (result.inputs.length - 1 - i)) & 1); });
-        tr.insertCell().textContent = value === undefined ? "?" : String(value);
-        tr.insertCell().textContent = formatSI(result.volts[row], "V");
+        result.inputs.forEach((_, i) => { setText(tr.insertCell(), String((row >> (result.inputs.length - 1 - i)) & 1)); });
+        setText(tr.insertCell(), value === undefined ? "?" : String(value));
+        setText(tr.insertCell(), formatSI(result.volts[row], "V"));
       });
-      table.append(grid);
+      appendLocalized(table, grid);
       if (result.outputs.includes(undefined)) table.prepend(Object.assign(document.createElement("p"), { className: "muted", textContent: "? marks an output between the logic thresholds; the expression treats it as don't-care." }));
     } catch (error) {
-      expression.textContent = "";
-      table.textContent = error instanceof Error ? error.message : String(error);
+      setText(expression, "");
+      setText(table, error instanceof Error ? error.message : String(error));
     } finally {
       busy = false;
       read.disabled = false;
-      read.textContent = "Read truth table";
+      setText(read, "Read truth table");
     }
   };
   return {
@@ -984,7 +986,7 @@ export function createLogicConverter(host: HTMLElement, comp: SchComponent, onCl
     },
     update() {},
     clear() {
-      expression.textContent = "";
+      setText(expression, "");
       table.replaceChildren();
     },
   };
@@ -994,13 +996,13 @@ export function createDistortionAnalyzer(host: HTMLElement, comp: SchComponent, 
   const win = floatingWindow(host, `Distortion analyzer ${comp.refDes}`, 340, 340, onClose);
   const display = document.createElement("div");
   display.className = "readout";
-  display.textContent = "--";
+  setText(display, "--");
   const detail = document.createElement("div");
   detail.className = "muted pad";
-  detail.textContent = "Connect IN and run the circuit.";
+  setText(detail, "Connect IN and run the circuit.");
   const table = document.createElement("div");
   table.className = "logic-table";
-  win.body.append(display, detail, table);
+  appendLocalized(win.body, display, detail, table);
   return {
     element: win.root,
     follow(part) {
@@ -1010,33 +1012,33 @@ export function createDistortionAnalyzer(host: HTMLElement, comp: SchComponent, 
     update(run) {
       const wave = inputWave(run, comp);
       table.replaceChildren();
-      if (!wave) { display.textContent = "--"; detail.textContent = run.tran ? "Connect IN to a signal." : "Needs a transient run."; return; }
+      if (!wave) { setText(display, "--"); setText(detail, run.tran ? "Connect IN to a signal." : "Needs a transient run."); return; }
       const given = comp.params.fundamental?.trim() ? readValue(comp.params.fundamental) : undefined;
       const fundamental = given && given > 0 ? given : countFrequency(wave.time, wave.volts)?.frequency;
-      if (!fundamental) { display.textContent = "--"; detail.textContent = "No steady signal yet: it needs at least two whole periods, or set the fundamental."; return; }
+      if (!fundamental) { setText(display, "--"); setText(detail, "No steady signal yet: it needs at least two whole periods, or set the fundamental."); return; }
       const harmonics = Math.max(2, Math.min(50, Math.round(readValue(comp.params.harmonics ?? "9") ?? 9)));
       let result;
       try { result = fourier(wave.time, wave.volts, fundamental, harmonics); }
-      catch (error) { display.textContent = "--"; detail.textContent = error instanceof Error ? error.message : String(error); return; }
-      display.textContent = `${result.thd.toFixed(result.thd < 1 ? 3 : 2)} % THD`;
-      detail.textContent = `Fundamental ${formatSI(fundamental, "Hz")}${given ? " (set)" : " (measured)"}, ${formatSI(result.rows[0].magnitude, "V")} peak. Harmonics 2 to ${harmonics}, over the last whole period.`;
+      catch (error) { setText(display, "--"); setText(detail, error instanceof Error ? error.message : String(error)); return; }
+      setText(display, `${result.thd.toFixed(result.thd < 1 ? 3 : 2)} % THD`);
+      setText(detail, `Fundamental ${formatSI(fundamental, "Hz")}${given ? " (set)" : " (measured)"}, ${formatSI(result.rows[0].magnitude, "V")} peak. Harmonics 2 to ${harmonics}, over the last whole period.`);
       const grid = document.createElement("table");
       const head = grid.createTHead().insertRow();
-      for (const name of ["Harmonic", "Frequency", "Amplitude", "Relative"]) head.append(Object.assign(document.createElement("th"), { textContent: name }));
+      for (const name of ["Harmonic", "Frequency", "Amplitude", "Relative"]) appendLocalized(head, Object.assign(document.createElement("th"), { textContent: name }));
       const body = grid.createTBody();
       const base = result.rows[0].magnitude || 1;
       for (const row of result.rows) {
         const tr = body.insertRow();
-        tr.insertCell().textContent = String(row.harmonic);
-        tr.insertCell().textContent = formatSI(row.frequency, "Hz");
-        tr.insertCell().textContent = formatSI(row.magnitude, "V");
-        tr.insertCell().textContent = `${(20 * Math.log10(Math.max(row.magnitude / base, 1e-12))).toFixed(1)} dB`;
+        setText(tr.insertCell(), String(row.harmonic));
+        setText(tr.insertCell(), formatSI(row.frequency, "Hz"));
+        setText(tr.insertCell(), formatSI(row.magnitude, "V"));
+        setText(tr.insertCell(), `${(20 * Math.log10(Math.max(row.magnitude / base, 1e-12))).toFixed(1)} dB`);
       }
-      table.append(grid);
+      appendLocalized(table, grid);
     },
     clear() {
-      display.textContent = "--";
-      detail.textContent = "The circuit changed. Run it to measure.";
+      setText(display, "--");
+      setText(detail, "The circuit changed. Run it to measure.");
       table.replaceChildren();
     },
   };
@@ -1049,28 +1051,28 @@ export function createIvAnalyzer(host: HTMLElement, comp: SchComponent, onClose:
   intro.className = "muted pad";
   const describe = () => {
     const roles: Record<string, string> = { "two-terminal": "1 = +, 2 = -", npn: "1 = C, 2 = B, 3 = E", pnp: "1 = C, 2 = B, 3 = E", nmos: "1 = D, 2 = G, 3 = S", pmos: "1 = D, 2 = G, 3 = S" };
-    intro.textContent = `Pins: ${roles[comp.params.mode ?? "two-terminal"] ?? roles["two-terminal"]}. Wire the device only to the analyzer: anything else connected becomes part of the curve. Change the device type and sweep in Properties.`;
+    setText(intro, `Pins: ${roles[comp.params.mode ?? "two-terminal"] ?? roles["two-terminal"]}. Wire the device only to the analyzer: anything else connected becomes part of the curve. Change the device type and sweep in Properties.`);
   };
   describe();
   const button = document.createElement("button");
-  button.textContent = "Trace curves";
+  setText(button, "Trace curves");
   const note = document.createElement("div");
   note.className = "muted pad";
   const plot = new Plot(win.body);
   win.body.prepend(intro, button, note);
   button.onclick = async () => {
     button.disabled = true;
-    button.textContent = "Tracing...";
-    note.textContent = "";
+    setText(button, "Tracing...");
+    setText(note, "");
     try {
       const curves = await trace();
       plot.set(curves.map((c) => ({ label: c.label, x: c.volts, y: c.amps, unit: "A" })), { xLabel: "Voltage (V)", xUnit: "V", yLabel: "Current (A)" });
     } catch (error) {
       plot.set([]);
-      note.textContent = error instanceof Error ? error.message : String(error);
+      setText(note, error instanceof Error ? error.message : String(error));
     } finally {
       button.disabled = false;
-      button.textContent = "Trace curves";
+      setText(button, "Trace curves");
     }
   };
   return {
