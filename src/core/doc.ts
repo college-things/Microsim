@@ -141,6 +141,9 @@ export class Doc {
       indicator: part.indicator ? structuredClone(part.indicator) : undefined,
       graphics: part.kind.startsWith("user:") ? structuredClone(part.graphics) : undefined,
     };
+    if (kind === "push-button" || kind === "spdt") {
+      comp.interactive = { kind: "switch", positions: 2, position: Number(comp.params.level) >= 0.5 ? 1 : 0, momentary: kind === "push-button", apply: { low: 0, high: 1 } };
+    }
     this.schematic.components.push(comp);
     if (kind.startsWith("user:") && part.definitions && !this.schematic.definitions.includes(part.definitions)) this.schematic.definitions += `\n${part.definitions}`;
     return comp;
