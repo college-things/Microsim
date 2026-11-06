@@ -89,3 +89,37 @@ describe("the 8051 LCD example", () => {
     expect(lcd.text()).toEqual(["Hello, Microsim ", "8051 + LCD      "]);
   }, 60000);
 });
+
+describe("the keypad example", () => {
+  it("shows a held key on the LCD, through a live value change", () => {
+    const schematic = buildExample(EXAMPLES.find((e) => e.name === "8051 keypad and LCD")!);
+    const keypad = schematic.components.find((c) => c.kind === "keypad4x4")!;
+    const lcdPart = schematic.components.find((c) => c.kind === "lcd16x2")!;
+    const first = buildNetlist(schematic);
+    expect(first.errors).toEqual([]);
+    const nets = first.pinNets.get(lcdPart.id)!;
+    const session = createLiveSession(first.text, { tmax: 1e-6 });
+    const lcd = new CharacterLcd();
+    const runTo = (until: number) => {
+      while (session.time < until) {
+        const chunk = session.advance(until, 1e9);
+        const index = (pin: string) => session.names.map((n) => n.toLowerCase()).indexOf(`v(${nets.get(pin)})`.toLowerCase());
+        const col = (pin: string) => (nets.get(pin) === "0" ? new Float64Array(chunk.time.length) : nets.get(pin) ? chunk.values[index(pin)] : undefined);
+        lcd.feed({ time: chunk.time, rs: col("RS")!, e: col("E")!, rw: col("RW"), data: ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"].map(col) });
+      }
+    };
+    runTo(10e-3);
+    expect(lcd.text()).toEqual(["Press a key     ", "Key:            "]);
+    keypad.params.pressed = "#";
+    expect(session.update(buildNetlist(schematic).text)).toBe(true);
+    runTo(14e-3);
+    expect(lcd.text()[1]).toBe("Key: #          ");
+    keypad.params.pressed = "none";
+    expect(session.update(buildNetlist(schematic).text)).toBe(true);
+    runTo(16e-3);
+    keypad.params.pressed = "7";
+    expect(session.update(buildNetlist(schematic).text)).toBe(true);
+    runTo(20e-3);
+    expect(lcd.text()[1]).toBe("Key: 7          ");
+  }, 120000);
+});
