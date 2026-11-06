@@ -1581,7 +1581,7 @@ function measuredRuns(name: string, runs: SweepRun[], measurement: Measurement):
   if (runs[0].summary) win.body.append(el("pre", { textContent: runs[0].summary.join("\n") }));
   if (runs[0].histogram) histogramPlot(win.body, runs[0].histogram, `${measurement.kind} ${measurement.vector}`);
   const rows = el("pre");
-  pageRuns(win.body, runs, page => { rows.textContent = page.map(r => `${r.label}: ${r.measurement!.toPrecision(7)}${r.settings ? `  ${Object.entries(r.settings).map(([k, v]) => `${k}=${v}`).join(", ")}` : ""}`).join("\n"); });
+  pageRuns(win.body, runs, page => { rows.textContent = page.map(r => `${r.label}: ${formatSI(r.measurement!, "", 6)}${r.settings ? `  ${Object.entries(r.settings).map(([k, v]) => `${k}=${typeof v === "number" ? formatSI(v, "", 5).replace(/\s/g, "") : v}`).join(", ")}` : ""}`).join("\n"); });
   win.body.append(rows);
 }
 

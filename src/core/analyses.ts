@@ -558,7 +558,9 @@ export async function executeAnalysisPlan(netlist: string, plan: AnalysisPlan, r
       const runs = await monteCarlo(circuit(), plan.options.runs, plan.options.defaultTolerance, plan.request, run, undefined, plan.options, plan.measurement);
       const values = runs.map(r => r.measurement!);
       const stats = statistics(values);
-      runs[0].summary = [`Mean: ${stats.mean}`, `Standard deviation (population): ${stats.standardDeviation}`, `Minimum: ${stats.minimum}`, `Maximum: ${stats.maximum}`];
+      // Six significant figures: enough to compare runs, without float noise.
+      const six = (value: number) => String(Number(value.toPrecision(6)));
+      runs[0].summary = [`Mean: ${six(stats.mean)}`, `Standard deviation (population): ${six(stats.standardDeviation)}`, `Minimum: ${six(stats.minimum)}`, `Maximum: ${six(stats.maximum)}`];
       runs[0].histogram = histogram(values);
       return runs;
     }
