@@ -494,7 +494,8 @@ EXAMPLES.push({
     const series = doc.addPart("resistor", 300, 40, { value: "330" });
     const led = doc.addPart("led-red", 420, 40);
     const ground = doc.addPart("ground", 420, 220);
-    const scope = doc.addPart("oscilloscope", 420, -120);
+    // The blinker runs at about 7 Hz: show about two periods.
+    const scope = doc.addPart("oscilloscope", 420, -120, { timePerDiv: "30m" });
     doc.connectPins(supply, "p", timer, "VCC");
     doc.connectPins(supply, "p", timer, "RESET");
     doc.connectPins(supply, "p", r1, "1");

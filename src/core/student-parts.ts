@@ -28,20 +28,20 @@ export function studentParts(base: PartDef[]): PartDef[] {
     params: [param('value', 'Maximum resistance', '10k'), param('percent', 'Setting (%)', '50')], valueParam: 'percent',
     spice: 'R{ref} {pin:1} {pin:2} {max(0.001,{param:value}*limit({param:percent},0,100)/100)}',
     graphics: [...base.find(p => p.kind === 'resistor')!.graphics, line(-12, 20, 12, -20), line(12, -20, 5, -16)] });
-  for (const [kind, name, value, label] of [['lamp', 'Lamp (fixed hot resistance)', '120', 'LAMP'], ['buzzer', 'Buzzer (resistive load)', '100', 'BUZZ']] as const) {
+  for (const [kind, name, value, label] of [['lamp', 'Lamp', '120', 'LAMP'], ['buzzer', 'Buzzer', '100', 'BUZZ']] as const) {
     parts.push({ kind, name, category: 'Basic', prefix: 'R', pins: pair, params: [param('value', 'Resistance', value)], valueParam: 'value',
       spice: 'R{ref} {pin:1} {pin:2} {param:value}', graphics: [line(-30, 0, -16, 0), rect(-16, -16, 32, 32), line(16, 0, 30, 0), text(0, 3, label, 7)],
       ...(kind === 'lamp' ? { indicator: { kind: 'lamp' as const, pins: ['1', '2'], reads: 'voltage' as const, vmax: 12 } } : {}) });
   }
-  parts.push({ kind: 'ldr', name: 'LDR light-dependent resistor', category: 'Basic', prefix: 'R', pins: pair,
+  parts.push({ kind: 'ldr', name: 'Light-dependent resistor (LDR)', category: 'Basic', prefix: 'R', pins: pair,
     params: [param('r10', 'Resistance at 10 lux', '10k'), param('lux', 'Light level (lux)', '10'), param('gamma', 'Light exponent', '0.7')],
     spice: 'R{ref} {pin:1} {pin:2} {{param:r10}*pow(10/max({param:lux},0.001),{param:gamma})}',
     graphics: [...base.find(p => p.kind === 'resistor')!.graphics, line(-17, -22, -5, -12), line(-7, -24, 5, -14)], valueParam: 'lux' });
-  parts.push({ kind: 'ntc', name: 'NTC thermistor (beta)', category: 'Basic', prefix: 'R', pins: pair,
+  parts.push({ kind: 'ntc', name: 'NTC thermistor', category: 'Basic', prefix: 'R', pins: pair,
     params: [param('r25', 'Resistance at 25 C', '10k'), param('beta', 'Beta (K)', '3950'), param('temperature', 'Temperature (C)', '25')],
     spice: 'R{ref} {pin:1} {pin:2} {{param:r25}*exp({param:beta}*(1/({param:temperature}+273.15)-1/298.15))}',
     graphics: [...base.find(p => p.kind === 'resistor')!.graphics, line(-15, 16, 15, -16), text(18, -16, 'T')], valueParam: 'temperature' });
-  parts.push({ kind: 'crystal', name: 'Quartz crystal (motional RLC)', category: 'Basic', prefix: 'X', pins: pair,
+  parts.push({ kind: 'crystal', name: 'Crystal', category: 'Basic', prefix: 'X', pins: pair,
     params: [param('freq', 'Series resonance (Hz)', '1meg'), param('cm', 'Motional capacitance', '20f'), param('rs', 'Series resistance', '30'), param('c0', 'Shunt capacitance', '3p')],
     spice: 'X{ref} {pin:1} {pin:2} MS_CRYSTAL f={param:freq} cm={param:cm} rs={param:rs} c0={param:c0}',
     definitions: `.subckt MS_CRYSTAL a b params: f=1meg cm=20f rs=30 c0=3p
@@ -51,7 +51,7 @@ Cmot c b {cm}
 Csh a b {c0}
 .ends`,
     graphics: [line(-30, 0, -9, 0), line(9, 0, 30, 0), line(-9, -13, -9, 13), line(9, -13, 9, 13), rect(-5, -10, 10, 20)], valueParam: 'freq' });
-  parts.push({ kind: 'fuse', name: 'Fuse (overcurrent time integral)', category: 'Basic', prefix: 'X', pins: pair,
+  parts.push({ kind: 'fuse', name: 'Fuse', category: 'Basic', prefix: 'X', pins: pair,
     params: [param('rating', 'Rated current (A)', '0.1'), param('delay', 'Excess I-squared time (s)', '10m'), param('ron', 'Cold resistance', '0.1')],
     spice: 'X{ref} {pin:1} {pin:2} MS_FUSE rating={param:rating} delay={param:delay} ron={param:ron}',
     definitions: `.subckt MS_FUSE a b params: rating=0.1 delay=10m ron=0.1
@@ -75,7 +75,7 @@ Scontact a b cp cn CONTACT
   parts.push(relay);
   for (const spdt of [false, true]) {
     const kind = spdt ? 'spdt' : 'push-button';
-    const p = block(kind, spdt ? 'SPDT switch (live)' : 'Push button (momentary, live)', 'Basic', ['COM'], spdt ? ['NC', 'NO'] : ['NO'],
+    const p = block(kind, spdt ? 'SPDT switch' : 'Push button', 'Basic', ['COM'], spdt ? ['NC', 'NO'] : ['NO'],
       `X{ref} ${spdt ? '{pin:COM} {pin:NC} {pin:NO}' : '{pin:COM} {pin:NO}'} MS_${spdt ? 'SPDT' : 'BUTTON'} level={param:level}`);
     p.params = [param('level', 'Position (0 or 1)', '0')];
     p.definitions = `.subckt MS_${spdt ? 'SPDT' : 'BUTTON'} c ${spdt ? 'nc ' : ''}no params: level=0
