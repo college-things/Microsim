@@ -358,6 +358,35 @@ export const PARTS: PartDef[] = [
     spice: "", instrument: "serial-terminal",
     graphics: [...instrumentBox("UART", 48, 34), line(-10, 17, -10, 25), line(10, 17, 10, 25), text(-10, 9, "RX", 6), text(10, 9, "TX", 6)],
   },
+  {
+    kind: "frequency-counter", name: "Frequency counter", category: "Instruments", prefix: "XFC",
+    pins: [{ name: "IN", x: 0, y: 25 }],
+    params: [{ key: "threshold", label: "Trigger level (V, blank for mid-swing)", default: "", text: true }],
+    spice: "", instrument: "frequency-counter",
+    graphics: [...instrumentBox("FREQ", 48, 34), line(0, 17, 0, 25)],
+  },
+  {
+    kind: "spectrum-analyzer", name: "Spectrum analyzer", category: "Instruments", prefix: "XSA",
+    pins: [{ name: "IN", x: 0, y: 25 }],
+    params: [
+      { key: "fmax", label: "Maximum frequency (Hz, blank for all)", default: "", text: true },
+      { key: "scale", label: "Scale", default: "dBV", options: ["dBV", "linear"] },
+    ],
+    spice: "", instrument: "spectrum-analyzer",
+    graphics: [...instrumentBox("SPECTRUM", 64, 34), line(0, 17, 0, 25)],
+  },
+  {
+    kind: "word-generator", name: "Word generator", category: "Instruments", prefix: "XWG",
+    pins: Array.from({ length: 8 }, (_, i) => ({ name: `D${i}`, x: -35 + i * 10, y: 30, optional: true })),
+    params: [
+      { key: "words", label: "Words (hex, or binary ending in b)", default: "01 02 04 08 10 20 40 80", text: true },
+      { key: "rate", label: "Words per second (Hz)", default: "1k" },
+      { key: "high", label: "High level (V)", default: "5" },
+      { key: "mode", label: "Mode", default: "repeat", options: ["repeat", "once"] },
+    ],
+    spice: "", instrument: "word-generator",
+    graphics: [...instrumentBox("WORD GEN", 84, 40), ...Array.from({ length: 8 }, (_, i) => line(-35 + i * 10, 20, -35 + i * 10, 30))],
+  },
 ];
 
 // Original process models. Signal voltages are engineering units, referred to GND.

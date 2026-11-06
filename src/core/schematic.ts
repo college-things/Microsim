@@ -35,6 +35,9 @@ export type InstrumentKind =
   | "wattmeter"
   | "logic-analyzer"
   | "serial-terminal"
+  | "frequency-counter"
+  | "spectrum-analyzer"
+  | "word-generator"
   | "clock"
   | "unsupported";
 

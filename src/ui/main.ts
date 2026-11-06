@@ -10,7 +10,7 @@ import { runSimulation, stopSimulation } from "../sim/client";
 import { LiveBuffer, LiveRun } from "../sim/live";
 import { holdWorkerScript } from "../sim/spawn";
 import { SchematicCanvas } from "./canvas";
-import { clearArea, createBode, createLogicAnalyzer, createSerialTerminal, createMultimeter, createScope, createWattmeter, floatingWindow, type InstrumentView, type RunData, type ScopeSettings, showWindow, tileWindows } from "./instruments";
+import { clearArea, createBode, createFrequencyCounter, createLogicAnalyzer, createSerialTerminal, createSpectrumAnalyzer, createMultimeter, createScope, createWattmeter, floatingWindow, type InstrumentView, type RunData, type ScopeSettings, showWindow, tileWindows } from "./instruments";
 import { buildExample, EXAMPLES, type Example } from "../core/examples";
 import { resultToCsv, runsToCsv, schematicToSvg } from "../core/export";
 import { billOfMaterials, bomToCsv, bomToHtml, electricalRulesCheck, kicadNetlist } from "../core/reports";
@@ -766,6 +766,10 @@ function openInstrument(comp: SchComponent): void {
     view = createWattmeter(sheetHost, comp, onClose);
   } else if (comp.instrument === "logic-analyzer") {
     view = createLogicAnalyzer(sheetHost, comp, settingsFor(), rescaled, onClose, running);
+  } else if (comp.instrument === "frequency-counter") {
+    view = createFrequencyCounter(sheetHost, comp, onClose);
+  } else if (comp.instrument === "spectrum-analyzer") {
+    view = createSpectrumAnalyzer(sheetHost, comp, onClose);
   } else if (comp.instrument === "serial-terminal") {
     const id = comp.id;
     view = createSerialTerminal(sheetHost, comp, onClose, (bytes) => {
@@ -1005,7 +1009,7 @@ function updateIndicators(run: RunData, result: SimResult): void {
 function startLive(run: RunData, netlist: string, instruments: SchComponent[], scopes: SchComponent[]): void {
   stopLive();
   const varies = changesOverTime(netlist);
-  const watching = instruments.filter((c) => c.instrument !== "bode-plotter" && c.instrument !== "function-generator" && c.instrument !== "clock");
+  const watching = instruments.filter((c) => c.instrument !== "bode-plotter" && c.instrument !== "function-generator" && c.instrument !== "clock" && c.instrument !== "word-generator");
   const keep = liveVectors(run, watching);
   if (!keep.length && varies) {
     log.push({ text: notWatchedReason(), kind: "warning" });
@@ -1091,6 +1095,12 @@ function autoTimePerDiv(netlist: string): number {
   }
   for (const match of netlist.matchAll(/\bpulse\s*\(([^)]*)\)/gi)) {
     const period = parseValue(match[1].trim().split(/\s+/)[6]);
+    if (period > 0) longest = Math.max(longest, period);
+  }
+  // A repeating piecewise-linear source, such as a word generator's, repeats every (last time - R) seconds.
+  for (const match of netlist.matchAll(/\bpwl\s*\(([^)]*)\)\s*r\s*=\s*([^\s)]+)/gi)) {
+    const values = match[1].trim().split(/\s+/);
+    const period = parseValue(values[values.length - 2]) - parseValue(match[2]);
     if (period > 0) longest = Math.max(longest, period);
   }
   return longest > 0 ? (longest * 5) / 10 : 1e-3;

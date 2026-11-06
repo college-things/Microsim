@@ -8,6 +8,7 @@ import type { SimResult } from "../core/sim";
 import { formatSI, Plot, type Series } from "./plot";
 import {coupleScope,scopeTrigger} from '../core/scope';
 import { decodeUart, terminalText } from "../core/uart";
+import { countFrequency, spectrum } from "../core/measure";
 
 export interface RunData {
   op?: SimResult;
@@ -843,6 +844,85 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
     clear() {
       reset();
       detail.textContent = "The circuit changed. Run it to receive.";
+    },
+  };
+}
+
+/** The input's voltage against ground, or undefined when it is unconnected or not simulated. */
+function inputWave(run: RunData, comp: SchComponent): { time: Float64Array; volts: Float64Array } | undefined {
+  const net = run.pinNets.get(comp.id)?.get("IN");
+  const time = run.tran?.axis?.re;
+  if (!net || net === "0" || !time || !run.tran) return undefined;
+  const volts = findVector(run.tran, `v(${net})`)?.re;
+  return volts ? { time, volts } : undefined;
+}
+
+export function createFrequencyCounter(host: HTMLElement, comp: SchComponent, onClose: () => void): InstrumentView {
+  const win = floatingWindow(host, `Frequency counter ${comp.refDes}`, 300, 220, onClose);
+  const display = document.createElement("div");
+  display.className = "readout";
+  display.textContent = "--";
+  const detail = document.createElement("div");
+  detail.className = "muted pad";
+  detail.textContent = "Connect IN and run the circuit.";
+  win.body.append(display, detail);
+  return {
+    element: win.root,
+    follow(part) {
+      comp = part;
+      win.setTitle(`Frequency counter ${comp.refDes}`);
+    },
+    update(run) {
+      const wave = inputWave(run, comp);
+      if (!wave) { display.textContent = "--"; detail.textContent = run.tran ? "Connect IN to a signal." : "Needs a transient run."; return; }
+      const level = comp.params.threshold?.trim() ? readValue(comp.params.threshold) : undefined;
+      const reading = countFrequency(wave.time, wave.volts, level);
+      if (!reading) { display.textContent = "--"; detail.textContent = "No steady signal yet: it needs at least two whole periods, in the later half of the stored run."; return; }
+      display.textContent = formatSI(reading.frequency, "Hz");
+      detail.textContent = `Period ${formatSI(reading.period, "s")}, high ${formatSI(reading.highTime, "s")}, low ${formatSI(reading.lowTime, "s")}, duty ${(reading.duty * 100).toFixed(1)}%. ${formatSI(reading.peakToPeak, "V")} peak to peak, triggered at ${formatSI(reading.threshold, "V")}, averaged over ${reading.cycles} periods.`;
+    },
+    clear() {
+      display.textContent = "--";
+      detail.textContent = "The circuit changed. Run it to measure.";
+    },
+  };
+}
+
+export function createSpectrumAnalyzer(host: HTMLElement, comp: SchComponent, onClose: () => void): InstrumentView {
+  const win = floatingWindow(host, `Spectrum analyzer ${comp.refDes}`, 540, 360, onClose);
+  const note = message(win.body, "Connect IN and run the circuit.");
+  const plot = new Plot(win.body);
+  const detail = document.createElement("div");
+  detail.className = "muted pad";
+  win.body.append(detail);
+  return {
+    element: win.root,
+    follow(part) {
+      comp = part;
+      win.setTitle(`Spectrum analyzer ${comp.refDes}`);
+    },
+    update(run) {
+      const wave = inputWave(run, comp);
+      const result = wave && spectrum(wave.time, wave.volts, 8192);
+      if (!result) { plot.set([]); note.style.display = ""; note.textContent = run.tran ? "Connect IN to a signal." : "Needs a transient run."; detail.textContent = ""; return; }
+      note.style.display = "none";
+      const fmax = comp.params.fmax?.trim() ? readValue(comp.params.fmax) : undefined;
+      let bins = result.frequency.length;
+      if (fmax && fmax > 0) bins = Math.max(2, Math.min(bins, Math.ceil(fmax / result.resolution) + 1));
+      const decibels = comp.params.scale !== "linear";
+      const x = result.frequency.subarray(1, bins), amplitude = result.amplitude.subarray(1, bins);
+      const y = decibels ? amplitude.map((a) => 20 * Math.log10(Math.max(a, 1e-9))) : amplitude;
+      plot.set([{ label: decibels ? "Amplitude (dBV)" : "Amplitude", x, y, unit: decibels ? "dB" : "V", readout: decibels ? undefined : amplitude }], {
+        xLabel: "Frequency (Hz)", xUnit: "Hz", yLabel: decibels ? "dBV (peak)" : "Volts (peak)",
+        yRange: decibels ? [Math.max(-160, Math.min(...Array.from(y)) ), Math.max(...Array.from(y)) + 6] : undefined,
+      });
+      detail.textContent = `Peak ${formatSI(result.peak.amplitude, "V")} at ${formatSI(result.peak.frequency, "Hz")}. Resolution ${formatSI(result.resolution, "Hz")}, from the last ${formatSI(1 / result.resolution, "s")} of the run with a Hann window.`;
+    },
+    clear() {
+      plot.set([]);
+      note.style.display = "";
+      note.textContent = "The circuit changed. Run it to see the spectrum.";
+      detail.textContent = "";
     },
   };
 }
