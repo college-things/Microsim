@@ -1,12 +1,12 @@
 // Application shell: menus, palette, properties, spreadsheet, dialogs and the simulate flow.
 import { Assistant, explainError, Stopped } from "../agent/assistant";
-import { acDecibels, acSignals, findVector, fourier, monteCarlo, parameterSweep, temperatureSweep, type SweepRun } from "../core/analyses";
+import { acDecibels, acSignals, findVector, sweepValues, type AnalysisPlan, type BatchEntry, type Measurement, type MeasurementKind, type SweepAxis, type SweepRun } from "../core/analyses";
 import { Doc, newId } from "../core/doc";
 import { PART_BY_KIND, PARTS } from "../core/library";
 import { buildNetlist, changesOverTime, frequencyProblem, listSources, parseValue, pinNetsKey, pinWorld, readValue, resolveSource, runSignature } from "../core/netlist";
 import type { ImportIssue, SchComponent, Schematic } from "../core/schematic";
 import type { AnalysisRequest, SimResult } from "../core/sim";
-import { runSimulation, stopSimulation } from "../sim/client";
+import { runSimulation, runPlannedSimulation, stopSimulation } from "../sim/client";
 import { LiveBuffer, LiveRun } from "../sim/live";
 import { holdWorkerScript } from "../sim/spawn";
 import { SchematicCanvas } from "./canvas";
@@ -1231,13 +1231,32 @@ function resultWindow(title: string, width: number, height: number, results: Sim
   return win;
 }
 
+/** Keep large ensembles from creating thousands of traces or canvases on the page. */
+function pageRuns(parent: HTMLElement, runs: SweepRun[], draw: (page: SweepRun[]) => void, size = 100): void {
+  let page = 0;
+  const label = el("span");
+  const previous = el("button", { textContent: "Previous" });
+  const next = el("button", { textContent: "Next" });
+  const render = () => {
+    const start = page * size;
+    label.textContent = `Runs ${start + 1}-${Math.min(start + size, runs.length)} of ${runs.length}`;
+    previous.disabled = page === 0;
+    next.disabled = start + size >= runs.length;
+    draw(runs.slice(start, start + size));
+  };
+  previous.onclick = () => { page--; render(); };
+  next.onclick = () => { page++; render(); };
+  if (runs.length > size) parent.append(el("div", { className: "legend" }, previous, label, next));
+  render();
+}
+
 function grapher(title: string, runs: SweepRun[]): void {
   const first = runs[0]?.result;
   if (!first) return;
   const win = resultWindow(title, 620, 420, runs.map((r) => r.result));
   if (!first.axis) {
-    const rows = runs.flatMap((r) => r.result.vectors.map((v) => `${runs.length > 1 ? `${r.label}  ` : ""}${v.name} = ${formatSI(v.re[0], v.unit)}`));
-    const pre = el("pre", { textContent: rows.join("\n") });
+    const pre = el("pre");
+    pageRuns(win.body, runs, page => { pre.textContent = page.flatMap(r => r.result.vectors.map(v => `${runs.length > 1 ? `${r.label}  ` : ""}${v.name} = ${formatSI(v.re[0], v.unit)}`)).join("\n"); });
     pre.style.overflow = "auto";
     win.body.append(pre);
     return;
@@ -1273,10 +1292,11 @@ function grapher(title: string, runs: SweepRun[]): void {
     return seriesStyle(looks.get(label)!);
   };
   const noiseUnit = (name: string) => (name === "inoise" ? "/\u221AHz" : "V/\u221AHz");
+  let visibleRuns = runs.slice(0, 100);
   const redraw = () => {
     const main: Series[] = [];
     const angle: Series[] = [];
-    for (const run of runs) {
+    for (const run of visibleRuns) {
       const axis = run.result.axis!.re;
       const decibels = isAc ? acDecibels(run.result) : undefined;
       for (const vector of run.result.vectors) {
@@ -1310,7 +1330,7 @@ function grapher(title: string, runs: SweepRun[]): void {
     };
     legend.append(el("label", {}, box, signals.has(name) ? name : `${name} (no AC signal)`));
   }
-  redraw();
+  pageRuns(win.body, runs, page => { visibleRuns = page; redraw(); });
 }
 
 /** What a plot's upright axis shows, going by the units of what's on it. */
@@ -1354,11 +1374,13 @@ function fieldDefault(key: string, initial: string, choices: ReturnType<typeof c
   switch (key) {
     case "source": return choices.signal ?? choices.sources[0] ?? initial;
     case "fund": return choices.frequency ?? initial;
+    case "input": return choices.nets[0] ? `v(${choices.nets[0]})` : initial;
     case "output": return choices.output ? `v(${choices.output})` : initial;
     case "node":
     case "outp": return choices.output || initial;
     case "inp": return choices.nets[0] ?? initial;
-    case "ref": return choices.sweepable[0] ?? initial;
+    case "ref":
+    case "outerref": return choices.sweepable[0] ?? initial;
     default: return initial;
   }
 }
@@ -1374,7 +1396,7 @@ function sourceOrThrow(netlist: string, typed: string): string {
 }
 
 /** Fields that name or depend on something in the circuit, so they can't carry over to another. */
-const CIRCUIT_FIELDS = ["source", "fund", "output", "node", "inp", "inn", "outp", "outn", "ref"];
+const CIRCUIT_FIELDS = ["source", "fund", "output", "node", "inp", "inn", "outp", "outn", "ref", "outerref", "input"];
 
 const INNER_ANALYSES: [string, string][] = [["op", "Operating point"], ["tran", "Transient"], ["ac", "AC sweep"]];
 
@@ -1386,16 +1408,36 @@ const ANALYSIS_FIELDS: Record<string, [string, string, string][]> = {
   fourier: [["node", "Output net", ""], ["fund", "Fundamental frequency", "1k"], ["cycles", "Periods to settle", "10"]],
   sweep: [["ref", "Component", ""], ["param", "Parameter", "value"], ["from", "From", "1k"], ["to", "To", "10k"], ["steps", "Steps", "5"], ["inner", "Run at each step", "tran"], ["tstop", "Stop time (tran)", "10m"]],
   temperature: [["from", "From (C)", "-40"], ["to", "To (C)", "125"], ["steps", "Steps", "4"], ["inner", "Run at each step", "op"], ["tstop", "Stop time (tran)", "10m"]],
-  montecarlo: [["runs", "Runs", "10"], ["tol", "Tolerance (%)", "5"], ["inner", "Run at each step", "tran"], ["tstop", "Stop time (tran)", "10m"]],
+  montecarlo: [["runs", "Runs", "100"], ["tol", "Default tolerance (%)", "5"], ["tolerances", "Part tolerances (R1=1, C1=5), optional", ""], ["distribution", "Distribution", "uniform"], ["seed", "Seed (0-4294967295)", "1"], ["inner", "Run at each step", "tran"], ["tstop", "Stop time (tran)", "10m"]],
   noise: [["output", "Output, like v(out)", "v(n2)"], ["source", "Input source", "V1"], ["fstart", "Start frequency", "1"], ["fstop", "Stop frequency", "1meg"], ["points", "Points per decade", "20"]],
   transfer: [["output", "Output, like v(out)", "v(n2)"], ["source", "Input source", "V1"]],
   sensitivity: [["output", "Output, like v(out)", "v(n2)"]],
   polezero: [["inp", "Input +", "n1"], ["inn", "Input -", "0"], ["outp", "Output +", "n2"], ["outn", "Output -", "0"]],
 };
+// Sweep fields share the same base analysis and measurement controls.
+const MEASUREMENT_FIELDS: [string, string, string][] = [
+  ["measurement", "Measurement", "max"], ["output", "Measured vector", "v(out)"],
+  ["at", "Time or frequency (at/gain)", "1k"], ["input", "Input vector (gain)", "v(in)"],
+];
+for (const type of ["sweep", "temperature"]) ANALYSIS_FIELDS[type].push(["list", "Explicit values (optional; commas or spaces)", ""]);
+ANALYSIS_FIELDS.nested = [
+  ["outerkind", "Outer sweep", "parameter"], ["outerref", "Outer component", "R1"], ["outerparam", "Outer parameter", "value"],
+  ["outerlist", "Outer values (commas or spaces)", "1k, 2k"],
+  ["innerkind", "Inner sweep", "parameter"], ["ref", "Inner component", "R2"], ["param", "Inner parameter", "value"],
+  ["list", "Inner values (commas or spaces)", "1k, 2k"], ["inner", "Run at each step", "op"], ["tstop", "Stop time (tran)", "10m"],
+];
+ANALYSIS_FIELDS.worstcase = [["tol", "Default tolerance (%)", "5"], ["tolerances", "Part tolerances (R1=1, C1=5), optional", ""], ["inner", "Base analysis", "op"], ["tstop", "Stop time (tran)", "10m"]];
+for (const type of ["sweep", "temperature", "nested", "montecarlo", "worstcase"]) ANALYSIS_FIELDS[type].push(...MEASUREMENT_FIELDS);
+ANALYSIS_FIELDS.distortion = [...ANALYSIS_FIELDS.fourier, ["harmonics", "Harmonics (including fundamental)", "9"]];
+ANALYSIS_FIELDS.imd = [["output", "Measured vector", "v(out)"], ["f1", "First tone frequency", "1k"], ["f2", "Second tone frequency", "1.1k"], ["settle", "Settling time", "10m"], ["window", "Measurement window (at least one beat period)", "10m"]];
+ANALYSIS_FIELDS.noisefigure = [...ANALYSIS_FIELDS.noise, ["resistance", "Source resistance in circuit (Ohm)", "50"]];
+ANALYSIS_FIELDS.batch = [["entries", "Saved analyses (JSON; use Add to batch on an analysis)", "[]"]];
+const MEASUREMENTS: [MeasurementKind, string][] = [["at", "Value at time/frequency"], ["max", "Maximum"], ["min", "Minimum"], ["peakToPeak", "Peak-to-peak"], ["rms", "RMS"], ["average", "Average"], ["riseTime", "Rise time (10-90%)"], ["bandwidth", "-3 dB bandwidth"], ["gain", "Gain at frequency (V/V)"]];
+
 const ANALYSIS_NAMES: Record<string, string> = {
   op: "DC operating point", tran: "Transient", ac: "AC sweep", dc: "DC sweep",
   fourier: "Fourier", noise: "Noise", transfer: "Transfer function", sensitivity: "Sensitivity", polezero: "Pole-zero",
-  sweep: "Parameter sweep", temperature: "Temperature sweep", montecarlo: "Monte Carlo",
+  sweep: "Parameter sweep", temperature: "Temperature sweep", nested: "Nested sweep", montecarlo: "Monte Carlo", worstcase: "Worst case", distortion: "Harmonic distortion", imd: "Two-tone IMD", noisefigure: "Noise figure", batch: "Saved batch",
 };
 
 function innerRequest(v: Record<string, string>): AnalysisRequest {
@@ -1420,6 +1462,129 @@ function need(values: Record<string, string>, key: string, label: string): numbe
   return value;
 }
 
+function savedRequest(type: string, v: Record<string, string>): Exclude<AnalysisPlan, { type: "batch" }> {
+  const text = buildNetlist(doc.schematic).text;
+  switch (type) {
+    case "sweep": case "temperature": case "nested": {
+      const values = v.list?.trim() ? listValues(v.list) : sweepValues(need(v, "from", "start value"), need(v, "to", "end value"), need(v, "steps", "step count"));
+      const axis: SweepAxis = type === "temperature" || (type === "nested" && v.innerkind === "temperature")
+        ? { kind: "temperature", values } : { kind: "parameter", refDes: v.ref, param: v.param, values };
+      const axes: SweepAxis[] = [axis];
+      if (type === "nested") axes.unshift(v.outerkind === "temperature"
+        ? { kind: "temperature", values: listValues(v.outerlist) }
+        : { kind: "parameter", refDes: v.outerref, param: v.outerparam, values: listValues(v.outerlist) });
+      return { type: "sweep", axes, request: innerRequest(v), measurement: measurementFrom(v) };
+    }
+    case "montecarlo": return { type, options: { ...toleranceOptions(v), runs: need(v, "runs", "run count"), distribution: v.distribution as "uniform" | "gaussian", seed: need(v, "seed", "seed") }, request: innerRequest(v), measurement: measurementFrom(v) };
+    case "worstcase": return { type, options: toleranceOptions(v), request: innerRequest(v), measurement: measurementFrom(v) };
+    case "distortion": case "fourier": case "imd": {
+      const isImd = type === "imd";
+      const f1 = need(v, isImd ? "f1" : "fund", "frequency");
+      const f2 = isImd ? need(v, "f2", "second frequency") : f1;
+      if (!(f1 > 0) || !(f2 > 0)) throw new Error("Enter positive frequencies.");
+      const settle = isImd ? need(v, "settle", "settling time") : (need(v, "cycles", "settling periods") - 1) / f1;
+      const window = isImd ? need(v, "window", "measurement window") : 1 / f1;
+      const harmonics = type === "distortion" ? need(v, "harmonics", "harmonic count") : 9;
+      if (settle < 0 || !(window > 0)) throw new Error("Enter a nonnegative settling time and a positive window.");
+      const fastest = isImd ? 3 * Math.max(f1, f2) : harmonics * f1;
+      const request: Extract<AnalysisRequest, { type: "tran" }> = { type: "tran", tstop: settle + window, tstep: 1 / (fastest * 40), tmax: 1 / (fastest * 40) };
+      return isImd ? { type: "imd", request, vector: asOutput(v.output), f1, f2, start: settle }
+        : { type: "distortion", request, vector: asOutput(v.node), fundamental: f1, harmonics };
+    }
+    case "noisefigure": {
+      const source = sourceOrThrow(text, v.source);
+      if (!/^v/i.test(source)) throw new Error("Noise figure needs a voltage input source.");
+      return { type, request: { type: "noise", source, output: asOutput(v.output), sweep: "dec", points: need(v, "points", "point count"), fstart: need(v, "fstart", "start frequency"), fstop: need(v, "fstop", "stop frequency") }, sourceResistance: need(v, "resistance", "source resistance") };
+    }
+    case "op": return { type: "op" };
+    case "tran": {
+      const tstop = need(v, "tstop", "stop time");
+      return { type: "tran", tstop, tstep: tstop / 1000, tmax: v.tmax?.trim() ? need(v, "tmax", "maximum step") : tstop / 200 };
+    }
+    case "ac": return { type: "ac", sweep: "dec", points: need(v, "points", "point count"), fstart: need(v, "fstart", "start frequency"), fstop: need(v, "fstop", "stop frequency") };
+    case "dc": return { type: "dc", source: sourceOrThrow(text, v.source), start: need(v, "start", "start"), stop: need(v, "stop", "stop"), step: need(v, "step", "step") };
+    case "noise": return { type: "noise", output: asOutput(v.output), source: sourceOrThrow(text, v.source), sweep: "dec", points: need(v, "points", "point count"), fstart: need(v, "fstart", "start frequency"), fstop: need(v, "fstop", "stop frequency") };
+    case "transfer": return { type, output: asOutput(v.output), source: sourceOrThrow(text, v.source) };
+    case "sensitivity": return { type, output: asOutput(v.output) };
+    case "polezero": return { type, input: [v.inp, v.inn], output: [v.outp, v.outn] };
+    default: throw new Error("Choose an analysis to add to the batch.");
+  }
+}
+
+function readBatch(text: string): BatchEntry[] {
+  let entries: unknown;
+  try { entries = JSON.parse(text); } catch { throw new Error("The saved batch is not valid JSON. Use Add to batch to create entries, then edit or reorder the list."); }
+  if (!Array.isArray(entries)) throw new Error("Enter a saved list of named analyses.");
+  return entries as BatchEntry[];
+}
+
+function measurementFrom(v: Record<string, string>): Measurement {
+  const kind = v.measurement as MeasurementKind;
+  return { kind, vector: asOutput(v.output), at: kind === "at" || kind === "gain" ? need(v, "at", "measurement position") : undefined, input: kind === "gain" ? asOutput(v.input) : undefined };
+}
+
+function listValues(text: string): number[] {
+  const values = text.trim().split(/[,;\s]+/).map(readValue);
+  if (!text.trim() || values.some(v => v === undefined)) throw new Error("Enter a list of numbers, separated by commas or spaces.");
+  return values as number[];
+}
+
+function toleranceOptions(v: Record<string, string>) {
+  const tolerances: Record<string, number> = {};
+  for (const item of (v.tolerances ?? "").split(/[,;]+/).filter(s => s.trim())) {
+    const pair = item.trim().split("=");
+    if (pair.length !== 2 || !pair[0].trim() || !Number.isFinite(Number(pair[1]))) throw new Error("Write part tolerances as R1=5, C1=10.");
+    tolerances[pair[0].trim()] = Number(pair[1]);
+  }
+  return { defaultTolerance: need(v, "tol", "default tolerance"), tolerances };
+}
+
+/** Mixed analyses get independent axes in one result window. */
+function batchWindow(runs: SweepRun[]): void {
+  const win = resultWindow("Saved batch", 660, 520, runs.map(r => r.result));
+  win.body.style.overflow = "auto";
+  const sections = el("div");
+  sections.style.display = "contents";
+  pageRuns(win.body, runs, page => {
+    sections.replaceChildren();
+    for (const run of page) {
+      sections.append(el("h3", { textContent: run.label }));
+      if (run.summary) sections.append(el("pre", { textContent: run.summary.join("\n") }));
+      if (run.measurement !== undefined) sections.append(el("pre", { textContent: `Measurement: ${run.measurement}\n${JSON.stringify(run.settings ?? {})}` }));
+      if (run.histogram) histogramPlot(sections, run.histogram, "Measurement");
+      const result = run.result;
+      if (result.transfer) sections.append(el("pre", { textContent: `Gain: ${result.transfer.gain}\nInput resistance: ${result.transfer.inputResistance} Ohm\nOutput resistance: ${result.transfer.outputResistance} Ohm` }));
+      if (result.sensitivity) sections.append(el("pre", { textContent: result.sensitivity.map(r => `${r.device}: ${r.absolute} per unit, ${r.normalized} relative`).join("\n") }));
+      if (result.axis) {
+        const plot = new Plot(sections);
+        plot.canvas.style.minHeight = "200px";
+        const db = result.analysis === "ac" ? acDecibels(result) : undefined;
+        plot.set(result.vectors.map((v, i) => ({ label: v.name, x: result.axis!.re, y: db?.get(v.name) ?? v.re, ...seriesStyle(i) })), { xLabel: result.axis.name, logX: result.axis.unit === "Hz" });
+      } else sections.append(el("pre", { textContent: result.vectors.map(v => `${v.name}: ${formatSI(v.re[0], v.unit)}`).join("\n") }));
+    }
+  }, 10);
+  win.body.append(sections);
+}
+
+function histogramPlot(parent: HTMLElement, bins: { edges: number[]; counts: number[] }, label: string): void {
+  const x: number[] = [], y: number[] = [];
+  bins.counts.forEach((count, i) => { x.push(bins.edges[i], bins.edges[i], bins.edges[i + 1], bins.edges[i + 1]); y.push(0, count, count, 0); });
+  const plot = new Plot(parent);
+  plot.canvas.style.minHeight = "180px";
+  plot.set([{ label: "Runs per bin", x, y }], { xLabel: label, yLabel: "Runs" });
+}
+
+function measuredRuns(name: string, runs: SweepRun[], measurement: Measurement): void {
+  grapher(name, runs);
+  const win = resultWindow(`${name}: ${measurement.kind} ${measurement.vector}`, 540, 380, runs.map(r => r.result));
+  win.body.style.overflow = "auto";
+  if (runs[0].summary) win.body.append(el("pre", { textContent: runs[0].summary.join("\n") }));
+  if (runs[0].histogram) histogramPlot(win.body, runs[0].histogram, `${measurement.kind} ${measurement.vector}`);
+  const rows = el("pre");
+  pageRuns(win.body, runs, page => { rows.textContent = page.map(r => `${r.label}: ${r.measurement!.toPrecision(7)}${r.settings ? `  ${Object.entries(r.settings).map(([k, v]) => `${k}=${v}`).join(", ")}` : ""}`).join("\n"); });
+  win.body.append(rows);
+}
+
 async function runAnalysis(form: AnalysisForm): Promise<void> {
   // Whatever is running gives way to the analysis the person just asked for.
   endActivity();
@@ -1438,36 +1603,39 @@ async function runAnalysis(form: AnalysisForm): Promise<void> {
   setActivity("analysis", `${ANALYSIS_NAMES[form.type]}...`);
   try {
     const name = ANALYSIS_NAMES[form.type];
-    if (form.type === "sweep") {
-      if (!v.ref?.trim()) throw new Error(circuitChoices().sweepable.length ? "Enter the part to sweep." : "This circuit has no named part with a value to sweep.");
-      grapher(name, await parameterSweep(doc.schematic, v.ref, v.param, need(v, "from", "start value"), need(v, "to", "end value"), need(v, "steps", "step count"), innerRequest(v), runSimulation));
-    } else if (form.type === "montecarlo") {
-      grapher(name, await monteCarlo(doc.schematic, need(v, "runs", "run count"), need(v, "tol", "tolerance"), innerRequest(v), runSimulation));
-    } else if (form.type === "temperature") {
-      grapher(name, await temperatureSweep(netlist.text, need(v, "from", "start temperature"), need(v, "to", "end temperature"), need(v, "steps", "step count"), innerRequest(v), runSimulation));
-    } else if (form.type === "noise") {
-      const result = await runSimulation(netlist.text, {
-        type: "noise", output: asOutput(v.output), source: sourceOrThrow(netlist.text, v.source), sweep: "dec", points: need(v, "points", "point count"),
-        fstart: need(v, "fstart", "start frequency"), fstop: need(v, "fstop", "stop frequency"),
-      });
+    let plan: AnalysisPlan;
+    if (form.type === "batch") {
+      const entries = readBatch(v.entries);
+      plan = { type: "batch", entries };
+      localStorage.setItem("microsim-analysis-batch", JSON.stringify(entries));
+    } else plan = savedRequest(form.type, v);
+    const runs = await runPlannedSimulation(netlist.text, doc.schematic, plan, (completed, fraction) => {
+      if (token === runToken) runState.textContent = `${name}: ${completed} runs complete, ${Math.round(fraction * 100)}% of current run`;
+    });
+    if (token !== runToken) return;
+    const result = runs[0].result;
+    if (plan.type === "batch") batchWindow(runs);
+    else if (plan.type === "sweep" || plan.type === "montecarlo" || plan.type === "worstcase") measuredRuns(name, runs, plan.measurement);
+    else if (plan.type === "noisefigure") {
+      const win = resultWindow(name, 620, 400, [result]);
+      new Plot(win.body).set([{ label: "Noise figure", x: result.axis!.re, y: result.vectors[0].re, unit: "dB" }], { logX: true, xLabel: "Frequency (Hz)", yLabel: "Noise figure (dB)" });
+    } else if (plan.type === "distortion" || plan.type === "imd") textWindow(name, runs[0].summary ?? [], result);
+    else if (plan.type === "noise") {
       if (result.noise) {
         log.push({ text: `Output noise ${formatSI(result.noise.onoiseRms, "V")} rms, input-referred ${formatSI(result.noise.inoiseRms, "V")} rms over the sweep.`, kind: "" });
         for (const row of result.noise.contributions.slice(0, 8)) log.push({ text: `  ${row.device}: ${formatSI(row.rms, "V")} rms`, kind: "" });
       }
       grapher(name, [{ label: "", result }]);
-    } else if (form.type === "transfer") {
-      const result = await runSimulation(netlist.text, { type: "transfer", output: asOutput(v.output), source: sourceOrThrow(netlist.text, v.source) });
+    } else if (plan.type === "transfer") {
       const t = result.transfer;
       textWindow(name, t ? [
         `Gain: ${t.gain.toPrecision(6)}`,
         `Input resistance: ${Number.isFinite(t.inputResistance) ? formatSI(t.inputResistance, "Ohm") : "infinite"}`,
         `Output resistance: ${formatSI(t.outputResistance, "Ohm")}`,
       ] : ["No result."], result);
-    } else if (form.type === "sensitivity") {
-      const result = await runSimulation(netlist.text, { type: "sensitivity", output: asOutput(v.output) });
+    } else if (plan.type === "sensitivity") {
       textWindow(name, (result.sensitivity ?? []).map((row) => `${row.device.padEnd(12)} ${row.absolute.toPrecision(4).padStart(12)} per unit   ${Number.isNaN(row.normalized) ? "--" : row.normalized.toPrecision(4)} relative`), result);
-    } else if (form.type === "polezero") {
-      const result = await runSimulation(netlist.text, { type: "polezero", input: [v.inp, v.inn], output: [v.outp, v.outn] });
+    } else if (plan.type === "polezero") {
       const rows: string[] = [];
       for (const vector of result.vectors) {
         for (let i = 0; i < vector.re.length; i++) {
@@ -1476,36 +1644,7 @@ async function runAnalysis(form: AnalysisForm): Promise<void> {
         }
       }
       textWindow(name, rows.length ? rows : ["No poles or zeros found."], result);
-    } else if (form.type === "fourier") {
-      const fund = parseValue(v.fund);
-      if (!(fund > 0)) throw new Error("Enter a fundamental frequency.");
-      const tstop = (parseValue(v.cycles) || 10) / fund;
-      const result = await runSimulation(netlist.text, { type: "tran", tstop, tstep: tstop / 2000, tmax: 1 / (fund * 100) });
-      const vector = findVector(result, `v(${v.node})`);
-      if (!vector) throw new Error(`No net named "${v.node}". See the Components tab for net names.`);
-      const out = fourier(result.axis!.re, vector.re, fund);
-      const lines = [
-        `DC component: ${formatSI(out.dc, "V")}`,
-        `Total harmonic distortion: ${out.thd.toFixed(3)} %`,
-        "",
-        ...out.rows.map((r) => `#${r.harmonic}  ${formatSI(r.frequency, "Hz").padEnd(11)} ${formatSI(r.magnitude, "V").padEnd(11)} ${r.phaseDeg.toFixed(1)} deg`),
-      ];
-      const win = resultWindow(`Fourier of v(${v.node})`, 420, 320, [result]);
-      win.body.append(el("pre", { textContent: lines.join("\n") }));
     } else {
-      let request: AnalysisRequest;
-      if (form.type === "tran") {
-        const tstop = parseValue(v.tstop);
-        if (!(tstop > 0)) throw new Error("Enter a stop time.");
-        request = { type: "tran", tstop, tstep: tstop / 1000, tmax: parseValue(v.tmax) || tstop / 200 };
-      } else if (form.type === "ac") {
-        request = { type: "ac", sweep: "dec", points: parseValue(v.points) || 40, fstart: parseValue(v.fstart), fstop: parseValue(v.fstop) };
-      } else if (form.type === "dc") {
-        request = { type: "dc", source: sourceOrThrow(netlist.text, v.source), start: need(v, "start", "start value"), stop: need(v, "stop", "stop value"), step: need(v, "step", "step") };
-      } else {
-        request = { type: "op" };
-      }
-      const result = await runSimulation(netlist.text, request, (f) => { runState.textContent = `${name} ${Math.round(f * 100)}%`; });
       if (result.analysis === "op") lastOpRows = result.vectors.map((vec) => [vec.name, vec.re[0], vec.unit]);
       grapher(name, [{ label: "", result }]);
     }
@@ -1524,27 +1663,41 @@ function analysesDialog(): void {
   dialog("Analyses", (box, close) => {
     const select = el("select", {}, ...Object.entries(ANALYSIS_NAMES).map(([value, label]) => el("option", { value, textContent: label, selected: formState.type === value })));
     const fields = el("div");
+    fields.style.maxHeight = "60vh";
+    fields.style.overflowY = "auto";
     const choices = circuitChoices();
     const netOptions = el("datalist", { id: "nets-list" }, ...choices.nets.map((net) => el("option", { value: net })));
     const outputOptions = el("datalist", { id: "outputs-list" }, ...choices.nets.map((net) => el("option", { value: `v(${net})` })));
     const sourceOptions = el("datalist", { id: "sources-list" }, ...choices.sources.map((name) => el("option", { value: name })));
     const partOptions = el("datalist", { id: "parts-list" }, ...choices.sweepable.map((name) => el("option", { value: name })));
     box.append(netOptions, outputOptions, sourceOptions, partOptions);
-    const SUGGEST: Record<string, string> = { source: "sources-list", output: "outputs-list", node: "nets-list", inp: "nets-list", inn: "nets-list", outp: "nets-list", outn: "nets-list", ref: "parts-list" };
+    const SUGGEST: Record<string, string> = { source: "sources-list", output: "outputs-list", input: "outputs-list", outerref: "parts-list", node: "nets-list", inp: "nets-list", inn: "nets-list", outp: "nets-list", outn: "nets-list", ref: "parts-list" };
     const render = () => {
       formState.type = select.value;
       const values = (formState.values[select.value] ??= {});
       fields.replaceChildren();
+      const notes: Record<string, string> = {
+        montecarlo: "Varies R, L and C independently. Gaussian tolerance is three standard deviations; draws are not clipped. Part tolerance overrides the default.",
+        worstcase: "Uses one sensitivity probe per toleranced passive, then two predicted corners. Nonlinear or nonmonotonic circuits can have worse results elsewhere.",
+        imd: "The circuit must already contain both input tones. Measures second and third order sum/difference products after settling. Use well separated tones and a fine transient step.",
+        noisefigure: "Uses 290 K. Include the stated source resistance in series with a voltage input source in the circuit; its thermal noise is included in the total.",
+        batch: "Saved in this browser. Add analyses with Add to batch, then edit or reorder the JSON list. All entries use the current circuit and stop at the first error.",
+      };
+      if (notes[select.value]) fields.append(el("p", { className: "muted", textContent: notes[select.value] }));
       for (const [key, label, initial] of ANALYSIS_FIELDS[select.value]) {
+        if (key === "at" && !["at", "gain"].includes(values.measurement ?? "max")) continue;
+        if (key === "input" && values.measurement !== "gain") continue;
         // An empty field starts over, as the circuit may by now have what it needs, such as a part to sweep.
-        const value = values[key] || fieldDefault(key, initial, choices);
-        const input = key === "inner"
+        const value = values[key] || (key === "ref" && select.value === "nested" ? choices.sweepable[1] ?? initial : fieldDefault(key, initial, choices));
+        const options = key === "measurement" ? MEASUREMENTS : key === "distribution" ? [["uniform", "Uniform"], ["gaussian", "Gaussian (tolerance = 3 sigma)"]] : key === "outerkind" || key === "innerkind" ? [["parameter", "Parameter"], ["temperature", "Temperature"]] : undefined;
+        const input = key === "entries" ? el("textarea", { value: values[key] ?? localStorage.getItem("microsim-analysis-batch") ?? "[]", rows: 10 }) : options
+          ? el("select", {}, ...options.map(([name, text]) => el("option", { value: name, textContent: text, selected: name === value }))) : key === "inner"
           ? el("select", {}, ...INNER_ANALYSES.map(([name, text]) => el("option", { value: name, textContent: text, selected: name === value })))
           : el("input", { value });
         if (SUGGEST[key]) input.setAttribute("list", SUGGEST[key]);
         if (key === "ref" && !choices.sweepable.length) input.setAttribute("placeholder", "No named part with a value here");
         values[key] = input.value;
-        input.oninput = () => { values[key] = input.value; };
+        input.oninput = () => { values[key] = input.value; if (key === "measurement") render(); };
         fields.append(el("label", { className: "field" }, label, input));
       }
     };
@@ -1553,7 +1706,19 @@ function analysesDialog(): void {
     render();
     box.append(el("div", { className: "dialog-actions" },
       el("button", { textContent: "Cancel", onclick: close }),
-      el("button", { className: "primary", textContent: "Run", onclick: () => { close(); void runAnalysis(formState); } }),
+      el("button", { textContent: "Add to batch", onclick: () => {
+        try {
+          const v = formState.values[formState.type];
+          const request = savedRequest(formState.type, v);
+          const batch = readBatch(localStorage.getItem("microsim-analysis-batch") ?? "[]");
+          batch.push({ label: `${ANALYSIS_NAMES[formState.type]} ${batch.length + 1}`, request });
+          const entries = JSON.stringify(batch, null, 2);
+          localStorage.setItem("microsim-analysis-batch", entries);
+          formState.values.batch = { entries };
+          select.value = "batch"; render();
+        } catch (error) { dialog("Batch", (box, done) => { box.append(el("p", { textContent: friendly(error) }), el("button", { textContent: "OK", onclick: done })); }); }
+      } }),
+      el("button", { className: "primary", textContent: "Run", onclick: () => { close(); void runAnalysis(structuredClone(formState)); } }),
     ));
   });
 }

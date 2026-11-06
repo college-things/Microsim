@@ -42,7 +42,7 @@ In order of how often Multisim users need them:
 1. [x] Reports: bill of materials, electrical rules check, netlist export.
 2. [x] Printing and PDF export of the schematic with a title block. File offers editable title fields, a single-sheet preview, A4/A3/US Letter/US Tabloid, either orientation, margins and fit or fixed scale. Print uses the browser/webview OS dialog; direct PDF export embeds a 300 dpi image. Native print dialogs still need hands-on checks on each platform.
 3. [ ] Hierarchical blocks, subcircuits and multi-page designs.
-4. [ ] Analyses: parameter, temperature and nested sweeps; Monte Carlo and worst case; Fourier and distortion.
+4. [x] Analyses: parameter, temperature, nested and list sweeps; seeded Monte Carlo and sensitivity-first worst case; Fourier/THD and two-tone IMD; noise figure, measurements and saved batches. Engine runs, orchestration and spectral processing use the cancellable simulation worker. Circuit tests cover analytic divider spread/corners, RC measurements, clipped-sine THD, cubic two-tone IMD, resistor noise figure, ordering and seed reproducibility. See the analysis conventions and remaining boundaries in `docs/limits.md`; platform hands-on checks remain in Phase 2.
 5. [x] Instruments: frequency counter, word generator, spectrum analyzer, logic converter, distortion analyzer and IV analyzer. The RF network analyzer is not planned (see limits).
 6. [ ] Parts: grow the original library (74xx and CMOS logic, common op-amps, regulators, transistors, displays, relays, sensors), with original symbols.
 7. [ ] Microcontrollers: HD44780-style LCD, keypad, 8051 timer 2, a debugger (step, breakpoints, registers), PIC16 core and assembler.

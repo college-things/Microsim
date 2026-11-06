@@ -1,6 +1,8 @@
 // Runs the engine off the UI thread so the app stays responsive during long simulations.
 // One script serves both one-shot jobs and continuous runs, so the engine ships only once.
-import type { AnalysisRequest, LiveSession } from "../core/sim";
+import { executeAnalysisPlan, type AnalysisPlan, type SweepRun } from "../core/analyses";
+import type { Schematic } from "../core/schematic";
+import type { AnalysisRequest, LiveSession, SimResult } from "../core/sim";
 import { SimError } from "../core/sim";
 import { createLiveSession, simulate } from "../engine/index";
 
@@ -8,6 +10,8 @@ export interface WorkerJob {
   id: number;
   netlist: string;
   request: AnalysisRequest;
+  plan?: AnalysisPlan;
+  schematic?: Schematic;
 }
 
 export interface LiveStart {
@@ -33,24 +37,36 @@ export type LiveCommand =
   /** Bytes typed into a serial input (a d_uart_tx instance), sent from the current simulated time. */
   | { type: "send"; device: string; bytes: number[] };
 
-function runJob({ id, netlist, request }: WorkerJob): void {
+async function runJob({ id, netlist, request, plan, schematic }: WorkerJob): Promise<void> {
   try {
-    let last = 0;
-    const result = simulate(netlist, request, {
-      onProgress: (fraction: number) => {
-        const now = performance.now();
-        if (now - last > 100) {
-          last = now;
-          self.postMessage({ id, progress: fraction });
-        }
-      },
-    });
-    const buffers: ArrayBuffer[] = [];
-    for (const v of [...result.vectors, ...(result.axis ? [result.axis] : [])]) {
-      buffers.push(v.re.buffer as ArrayBuffer);
-      if (v.im) buffers.push(v.im.buffer as ArrayBuffer);
+    let last = 0, completed = 0;
+    const progress = (fraction: number, force = false) => {
+      const now = performance.now();
+      if (force || now - last > 100) {
+        last = now;
+        self.postMessage({ id, progress: fraction, completed });
+      }
+    };
+    const run = async (text: string, inner: AnalysisRequest): Promise<SimResult> => {
+      progress(0);
+      const result = simulate(text, inner, { onProgress: fraction => progress(fraction) });
+      completed++;
+      progress(0);
+      return result;
+    };
+    progress(0, true);
+    const result: SimResult | SweepRun[] = plan
+      ? await executeAnalysisPlan(netlist, plan, run, schematic)
+      : await run(netlist, request);
+    progress(1, true);
+    const buffers = new Set<ArrayBuffer>();
+    for (const item of Array.isArray(result) ? result.map(r => r.result) : [result]) {
+      for (const v of [...item.vectors, ...(item.axis ? [item.axis] : [])]) {
+        buffers.add(v.re.buffer as ArrayBuffer);
+        if (v.im) buffers.add(v.im.buffer as ArrayBuffer);
+      }
     }
-    (self as unknown as Worker).postMessage({ id, result }, buffers);
+    (self as unknown as Worker).postMessage({ id, result }, [...buffers]);
   } catch (error) {
     const sim = error instanceof SimError ? error : undefined;
     self.postMessage({
@@ -164,5 +180,5 @@ function runLive(message: LiveCommand): void {
 self.onmessage = (event: MessageEvent<WorkerJob | LiveCommand>) => {
   const message = event.data;
   if ("type" in message) runLive(message);
-  else runJob(message);
+  else void runJob(message);
 };
