@@ -10,10 +10,11 @@ import { runSimulation, stopSimulation } from "../sim/client";
 import { LiveBuffer, LiveRun } from "../sim/live";
 import { holdWorkerScript } from "../sim/spawn";
 import { SchematicCanvas } from "./canvas";
-import { clearArea, createBode, createFrequencyCounter, createLogicAnalyzer, createLogicConverter, createSerialTerminal, createSpectrumAnalyzer, createMultimeter, createScope, createWattmeter, floatingWindow, type InstrumentView, type RunData, type ScopeSettings, showWindow, tileWindows } from "./instruments";
+import { clearArea, createBode, createDistortionAnalyzer, createIvAnalyzer, createFrequencyCounter, createLogicAnalyzer, createLogicConverter, createSerialTerminal, createSpectrumAnalyzer, createMultimeter, createScope, createWattmeter, floatingWindow, type InstrumentView, type RunData, type ScopeSettings, showWindow, tileWindows } from "./instruments";
 import { buildExample, EXAMPLES, type Example } from "../core/examples";
 import { resultToCsv, runsToCsv, schematicToSvg } from "../core/export";
 import { truthTable } from "../core/logic";
+import { ivCurves, type IvMode } from "../core/ivcurves";
 import { billOfMaterials, bomToCsv, bomToHtml, electricalRulesCheck, kicadNetlist } from "../core/reports";
 import { indicatorParts, indicatorVectors, readIndicator } from "../core/indicators";
 import { parseDeck } from "../core/deck";
@@ -781,6 +782,24 @@ function openInstrument(comp: SchComponent): void {
       if (!out) throw new Error("Connect OUT to the circuit's output.");
       return truthTable(netlist.text, inputs, out, runSimulation, readValue(part.params.high ?? "5") || 5, progress);
     });
+  } else if (comp.instrument === "iv-analyzer") {
+    const id = comp.id;
+    view = createIvAnalyzer(sheetHost, comp, onClose, async () => {
+      commitTypedValue();
+      const netlist = buildNetlist(doc.schematic);
+      if (netlist.errors.length) throw new Error(netlist.errors[0]);
+      const part = doc.schematic.components.find((c) => c.id === id);
+      const nets = netlist.pinNets.get(id);
+      if (!part || !nets) throw new Error("The IV analyzer is no longer in the circuit.");
+      const steps = (part.params.steps ?? "").trim() ? part.params.steps.split(/[\s,;]+/).filter(Boolean).map((s) => readValue(s)) : undefined;
+      if (steps?.some((s) => s === undefined || !Number.isFinite(s))) throw new Error("Steps must be numbers, such as 10u 20u 30u or 2 3 4.");
+      const start = (part.params.vstart ?? "").trim() ? readValue(part.params.vstart) : undefined;
+      return ivCurves(netlist.text, { "1": nets.get("1"), "2": nets.get("2"), "3": nets.get("3") }, {
+        mode: (part.params.mode ?? "two-terminal") as IvMode, vmax: readValue(part.params.vmax ?? "5") ?? 5, start, steps: steps as number[] | undefined,
+      }, runSimulation);
+    });
+  } else if (comp.instrument === "distortion-analyzer") {
+    view = createDistortionAnalyzer(sheetHost, comp, onClose);
   } else if (comp.instrument === "frequency-counter") {
     view = createFrequencyCounter(sheetHost, comp, onClose);
   } else if (comp.instrument === "spectrum-analyzer") {

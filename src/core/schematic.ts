@@ -39,6 +39,8 @@ export type InstrumentKind =
   | "spectrum-analyzer"
   | "word-generator"
   | "logic-converter"
+  | "distortion-analyzer"
+  | "iv-analyzer"
   | "clock"
   | "unsupported";
 
