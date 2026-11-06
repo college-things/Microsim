@@ -10,12 +10,20 @@ import { Doc } from '../../src/core/doc';
 import { EXAMPLES, buildExample } from '../../src/core/examples';
 import { parseCircuit, serializeCircuit } from '../../src/core/file';
 import { PARTS } from '../../src/core/library';
+import { twoPageFixture } from './hierarchy-fixture';
+import { buildNetlist } from '../../src/core/netlist';
 
 const empty=():Board=>({width:50,height:40,clearance:0.25,footprints:[],tracks:[],vias:[]});
 function add(b:Board,ref:string,x:number,y:number,pads:Pad[],rotation=0){b.footprints.push({component:ref,ref,x,y,rotation,pads});}
 const pad=(net:string,x=0,y=0):Pad=>({net,pin:'1',number:'1',x,y,shape:'roundrect',size:{x:1,y:1}});
 
 describe('original footprint library',()=>{
+ it('includes parts inside every page and block without fabricating block symbols',()=>{
+  const s=twoPageFixture(),b=boardFromSchematic(s),nets=buildNetlist(s).pinNets;
+  expect(b.footprints.map(f=>f.ref).sort()).toEqual(['V1','X1.E1','X2.E1']);
+  for(const f of b.footprints)for(const p of f.pads)expect(p.net).toBe(nets.get(f.component)?.get(p.pin));
+  b.footprints[2].x=70;expect(boardFromSchematic(s,b).footprints[2].x).toBe(70);
+ });
  it('has expected package counts, pitch and row spacing',()=>{
   for(const n of [8,14,16,20,28,40]){const p=FOOTPRINTS[`DIP-${n}`].pads;expect(p).toHaveLength(n);expect(p[1].y-p[0].y).toBeCloseTo(2.54);expect(p[n-1].x-p[0].x).toBeCloseTo(n>=28?15.24:7.62);expect(p[n/2].y).toBeCloseTo((n/2-1)*2.54);}
   for(const n of [8,14,16]){const p=FOOTPRINTS[`SOIC-${n}`].pads;expect(p).toHaveLength(n);expect(p[1].y-p[0].y).toBeCloseTo(1.27);expect(p[n-1].x).toBeCloseTo(5.4);expect(p.every(q=>q.drill===undefined)).toBe(true);}

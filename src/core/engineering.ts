@@ -2,6 +2,7 @@ import { defaultFootprint, packagePads, FOOTPRINTS } from './footprints';
 import { boardPads, boardSegments, padDrill, padSize, shapeDistance, lineShape, inside, transform } from './pcb-geometry';
 import { boardSilkscreen, type SilkLine } from './pcb-silk';
 import { zoneAnalysis } from './pcb-zones';
+import { flattenCircuit } from './hierarchy';
 import { buildNetlist } from "./netlist";
 import type { Point, Schematic } from "./schematic";
 import { validateFlowProgram, type FlowProgram } from './dataflow';
@@ -57,10 +58,11 @@ const validDrill=(diameter:number,drill:number)=>finite(diameter)&&finite(drill)
 
 /** New parts use package geometry; saved pads and package selections are preserved. */
 export function boardFromSchematic(s: Schematic, previous?: Board): Board {
+  s=flattenCircuit(s);
   const nets=buildNetlist(s).pinNets;
   return {
     ...structuredClone(previous),width:previous?.width??100,height:previous?.height??80,clearance:previous?.clearance??0.25,
-    footprints:s.components.filter(c=>c.pins.length&&!c.instrument&&c.kind!=='ground').map((c,i)=>{
+    footprints:s.components.filter(c=>c.pins.length&&!c.instrument&&c.kind!=='ground'&&!c.kind.startsWith('hierarchy-')).map((c,i)=>{
       const old=previous?.footprints.find(f=>f.component===c.id);
       if(old)return {...structuredClone(old),ref:c.refDes,pads:old.pads.map(p=>({...structuredClone(p),net:nets.get(c.id)?.get(p.pin)??p.net}))};
       const name=defaultFootprint(c.kind,c.pins.length);

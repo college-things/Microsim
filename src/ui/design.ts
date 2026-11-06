@@ -1,4 +1,5 @@
 import { FOOTPRINTS, changeFootprint } from '../core/footprints';
+import { flattenCircuit } from '../core/hierarchy';
 import { padDrill, padSize } from '../core/pcb-geometry';
 import { boardSilkscreen } from '../core/pcb-silk';
 import type { RouteResult, RouteProgress } from '../core/autoroute';
@@ -120,9 +121,10 @@ export class DesignUI {
       width.onchange = height.onchange = clearance.onchange = dimensions;
       const placements = () => {
         table.replaceChildren();
+        const components=flattenCircuit(this.doc.schematic).components;
         for (const f of board.footprints) {
           const row = el("div"); row.className = "design-controls"; row.append(el("strong", f.ref));
-          const component=this.doc.schematic.components.find(c=>c.id===f.component)!;
+          const component=components.find(c=>c.id===f.component)!;
           const pkg=el('select');pkg.setAttribute('aria-label',`${f.ref} footprint`);
           if(!f.name){const o=el('option','Saved generic pads');o.value='';pkg.append(o);}
           for(const name of Object.keys(FOOTPRINTS)){const o=el('option',name);o.value=name;pkg.append(o);}pkg.value=f.name??'';
