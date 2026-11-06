@@ -56,7 +56,7 @@ function amplifier(): Doc {
 
 /** Each circuit with how many ordered pairs of its pins aren't joined yet. */
 // The machine examples include the four-channel Tektronix scope, with C/D initially open.
-const PAIRS: Record<string, number> = { "RC low-pass filter": 128, "Common-emitter amplifier": 396, "Inverting op-amp": 126, "Full-wave rectifier": 244, "D flip-flop divider": 136, "Holding tank process": 182, "Conveyor process": 182, "8051 serial hello": 1394, "8051 serial echo": 1392, "Frequency counter and spectrum": 24, "Word generator count": 124 };
+const PAIRS: Record<string, number> = { "RC low-pass filter": 128, "Common-emitter amplifier": 396, "Inverting op-amp": 126, "Full-wave rectifier": 244, "D flip-flop divider": 136, "Holding tank process": 182, "Conveyor process": 182, "8051 serial hello": 1394, "8051 serial echo": 1392, "Frequency counter and spectrum": 24, "Word generator count": 124, "Logic converter majority": 668 };
 const circuits: [string, number, () => Doc][] = [
   ["the hand-built amplifier", 456, amplifier],
   ...EXAMPLES.map((example): [string, number, () => Doc] => [example.name, PAIRS[example.name], () => {

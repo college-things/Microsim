@@ -255,3 +255,8 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
   min-width: 0;
   font: 12px ui-monospace, Consolas, monospace;
 }
+
+.logic-expression { font-size: 18px; text-align: left; }
+.logic-table { overflow: auto; max-height: 220px; }
+.logic-table table { border-collapse: collapse; font: 12px ui-monospace, Consolas, monospace; }
+.logic-table th, .logic-table td { padding: 2px 8px; text-align: center; border-bottom: 1px solid var(--line, #3334); }
