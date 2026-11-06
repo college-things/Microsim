@@ -8,6 +8,8 @@ export interface PartDisplay {
   machine?:{kind:'tank'|'conveyor';fraction:number};
   /** Brightness from 0 to 1. */
   glow?: number;
+  /** Lit a..g and decimal-point segments for original library displays. */
+  segments?: boolean[];
   /** A digit or reading drawn over the part. */
   text?: string;
   /** Rows of a character LCD, drawn in the part's window. */
@@ -103,7 +105,8 @@ export function readIndicator(comp: SchComponent, result: SimResult, nets: Map<s
       }
       if (pattern.length !== 7) return undefined;
       const point = current(spec.dpSense);
-      return { text: `${SEGMENTS[pattern] ?? "-"}${point !== undefined && point >= threshold ? "." : ""}` };
+      return { text: `${SEGMENTS[pattern] ?? "-"}${point !== undefined && point >= threshold ? "." : ""}`,
+        ...(comp.kind.startsWith("sevenseg-") ? { segments: [...pattern].map(s => s === "1").concat(point !== undefined && point >= threshold) } : {}) };
     }
     case "hexdigit": {
       let value = 0;

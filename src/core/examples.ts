@@ -481,3 +481,59 @@ export function buildExample(example: Example): Schematic {
   example.build(doc);
   return doc.schematic;
 }
+
+EXAMPLES.push({
+  name: "555 LED blinker",
+  build(doc) {
+    const supply = doc.addPart("vcc", -300, -180, { value: "5" });
+    const timer = doc.addPart("ne555", 0, 0);
+    const r1 = doc.addPart("resistor", 180, -160, { value: "1k" });
+    const r2 = doc.addPart("resistor", 180, -60, { value: "10k" });
+    const timing = doc.addPart("electrolytic", -180, 120, { value: "10u" });
+    const bypass = doc.addPart("capacitor", -180, 220, { value: "10n" });
+    const series = doc.addPart("resistor", 300, 40, { value: "330" });
+    const led = doc.addPart("led-red", 420, 40);
+    const ground = doc.addPart("ground", 420, 220);
+    // The blinker runs at about 7 Hz: show about two periods.
+    const scope = doc.addPart("oscilloscope", 420, -120, { timePerDiv: "30m" });
+    doc.connectPins(supply, "p", timer, "VCC");
+    doc.connectPins(supply, "p", timer, "RESET");
+    doc.connectPins(supply, "p", r1, "1");
+    doc.connectPins(r1, "2", timer, "DISCH");
+    doc.connectPins(timer, "DISCH", r2, "1");
+    doc.connectPins(r2, "2", timer, "THRESH");
+    doc.connectPins(timer, "THRESH", timer, "TRIG");
+    doc.connectPins(timer, "TRIG", timing, "1");
+    doc.connectPins(timing, "2", ground, "g");
+    doc.connectPins(timer, "GND", ground, "g");
+    doc.connectPins(timer, "CTRL", bypass, "1");
+    doc.connectPins(bypass, "2", ground, "g");
+    doc.connectPins(timer, "OUT", series, "1");
+    doc.connectPins(series, "2", led, "A");
+    doc.connectPins(led, "K", ground, "g");
+    doc.connectPins(timer, "OUT", scope, "A");
+    doc.connectPins(timer, "TRIG", scope, "B");
+    doc.connectPins(scope, "G", ground, "g");
+    doc.schematic.texts.push({ id: "555-timing", x: -200, y: 300, text: "Original NE555: about 6.86 Hz, 52% duty. Timing capacitor charges between 1/3 and 2/3 supply." });
+  },
+}, {
+  name: "7805 regulated supply",
+  build(doc) {
+    const input = doc.addPart("vdc", -220, 0, { value: "12" });
+    const regulator = doc.addPart("7805", 0, -30);
+    const capacitor = doc.addPart("electrolytic", 180, 70, { value: "10u" });
+    const load = doc.addPart("resistor", 300, 70, { value: "100" });
+    const ground = doc.addPart("ground", -220, 200);
+    const meter = doc.addPart("multimeter", 420, -70);
+    doc.connectPins(input, "p", regulator, "IN");
+    doc.connectPins(input, "n", ground, "g");
+    doc.connectPins(regulator, "GND", ground, "g");
+    doc.connectPins(regulator, "OUT", capacitor, "1");
+    doc.connectPins(capacitor, "2", ground, "g");
+    doc.connectPins(regulator, "OUT", load, "1");
+    doc.connectPins(load, "2", ground, "g");
+    doc.connectPins(regulator, "OUT", meter, "p");
+    doc.connectPins(meter, "n", ground, "g");
+    doc.schematic.texts.push({ id: "7805-load", x: -120, y: 240, text: "12 V in, 5 V out at 50 mA. Model includes 2 V dropout and 1.5 A current limit; no thermal shutdown." });
+  },
+});

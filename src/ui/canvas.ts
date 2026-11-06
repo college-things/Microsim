@@ -921,6 +921,23 @@ export class SchematicCanvas {
     }
     const cx = (b.x0 + b.x1) / 2;
     const cy = (b.y0 + b.y1) / 2;
+    if (display.segments) {
+      ctx.save();
+      ctx.translate(comp.x, comp.y);
+      ctx.rotate(comp.rotation * Math.PI / 180);
+      if (comp.mirrored) ctx.scale(-1, 1);
+      const strokes = [[-8, -18, 8, -18], [10, -16, 10, -2], [10, 2, 10, 16], [-8, 18, 8, 18], [-10, 2, -10, 16], [-10, -16, -10, -2], [-8, 0, 8, 0]];
+      ctx.lineWidth = 3;
+      ctx.lineCap = "round";
+      strokes.forEach(([x1, y1, x2, y2], i) => {
+        ctx.strokeStyle = display.segments![i] ? "#e03131" : "#dedede";
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      });
+      ctx.fillStyle = display.segments[7] ? "#e03131" : "#dedede";
+      ctx.beginPath(); ctx.arc(16, 18, 2, 0, 2 * Math.PI); ctx.fill();
+      ctx.restore();
+      return;
+    }
     if (display.glow) {
       ctx.save();
       ctx.globalAlpha = 0.25 + 0.55 * display.glow;

@@ -20,6 +20,12 @@ The **Analyses** dialog now offers list and nested parameter/temperature sweeps,
 
 These features have automated circuit and worker-queue tests. Hands-on dialog, cancellation and desktop checks remain part of production-plan Phase 2.
 
+## Original parts library update
+
+The palette now includes the original student/hobby expansion described in [part models](part-models.md): polarized capacitors, rheostats, fuses, lamps, relays, live SPDT switches and momentary buttons, crystals, buzzers, named diodes/LEDs/transistors, analog ICs, HC/CMOS logic, both seven-segment polarities and light/temperature sensors. Every addition has electrical behavior tests. The canvas displays individual seven-segment states from simulated currents. The 555 blinker and 7805 supply examples simulate and pass exhaustive wiring tests.
+
+These are educational fits. Lamps and buzzers are fixed resistive loads; electrolytic polarity is marked but does not cause damage. Fuses use excess-I-squared trip time and reset on a fresh run. Relays use positive coil-voltage hysteresis, without bounce or armature motion. Sensors have static parameters. Op-amps model gain, dominant bandwidth, slew and rail headroom; regulators model reference, dropout and current limit. Analog ICs omit thermal protection and detailed supply behavior. Digital ICs have implicit fixed 5 V power and nominal timing; gates and the 74HC74 are one section per part, counters and the 74HC595 are whole functional devices. Display LEDs need external series resistors. See the model guide for precise boundaries and public datasheet fitting references. Bench comparisons, device corners, and platform hands-on animation/control verification remain unverified.
+
 ## 1. Remaining boundaries
 
 Each of these depends on another company's product or material, or would work against keeping the app light.
@@ -47,7 +53,7 @@ Each of these depends on another company's product or material, or would work ag
 - **A C compiler for microcontrollers.** Real SDCC compilation and independent built-in 8051 circuit execution are implemented. Compiled or imported Intel HEX can be attached to a core and saved with the circuit. GPIO, timers, interrupts and instruction timing have tests, including uCsim comparisons and real compiled C. The 8051 serial port (modes 0–3) drives real TXD waveforms, and the **Serial terminal** instrument decodes them. Imported NI 8051/8052 parts now convert to this core, and **Design > Microcontroller program** assembles their source here. NI PIC parts, physical chip power behavior and external bus waveforms remain unsupported. See the design workflow guide for the exact boundary.
 - **Reading `.mcuws` and `.mcuprj` project files.** They're undocumented and not needed, because a person picks the program file.
 - **Tank and conveyor machine behaviour.** Original placeable models simulate transient state and sensor outputs, with animated fill/motion and physical-unit readouts. Imported NI scripts, falling objects and exact sample behavior are still unsupported; those imported parts retain their starting models and notices.
-- **Rated parts that blow, and 3D parts.** No sample has them, and blowing needs the circuit to change during a run.
+- **Destructive device models and 3D parts.** The original fuse can open during a transient using an excess-I-squared integral. Other parts do not fail from excessive voltage, current, heat or reversed polarity. There is no arcing or 3D rendering.
 - **Other things left out:**
   - assembly variant editing
   - an editable electrical rules grid
@@ -74,7 +80,7 @@ These aren't impossible, but few or no samples use them.
 ## 2. What can only be approximate
 
 - **Results can differ from Multisim.** The engine, models and logic levels are the app's own. The project's tests use hand calculations, datasheet values and values stored in sample files. They don't compare against a running copy of Multisim.
-- **Library parts are fits, not vendor models.** Their numbers are fitted from public datasheet values, and many were first written from memory and still need confirming against the datasheet. They're marked approximate.
+- **Library parts are fits, not vendor models.** The new student/hobby parts have documented public-datasheet fitting targets and automated behavior checks in [part models](part-models.md). Older generic fits may still need datasheet confirmation. Neither set is a manufacturer-qualified model.
 - **Microcontroller pins are ideal.** Programs and timing are designed to run cycle by cycle, but pins are perfect logic drivers. Too much current from a pin won't show up, and supply voltage has no effect. Crystals do nothing: the clock is a number. External bus cycles aren't modelled.
 - **Two microcontroller pins differ from the datasheet on purpose.** P0 and RA4 act as weak highs rather than floating, because samples rely on that.
 - **Some timings are nominal.** The watchdog uses 18 ms where the datasheet allows 7 to 33 ms, an EEPROM write takes 10 ms, and LCD delays use typical values.
@@ -99,7 +105,7 @@ These are planned, in this order. Until they land, the app can't do them.
    - dragging wires and starting a wire from a wire
    - Find, zoom tools and Pause
    - keys and on-sheet control for switches and potentiometers
-6. **Parts library:** about 150 real parts with search, plus generic sources and meters you can place, and a model block with any pin count.
+6. **Parts library:** the student/hobby expansion is implemented with original models and symbols; see [part models](part-models.md). Remaining families include SCR/triac/IGBT, ADC/DAC, analog switches and motors; broader model characterization remains future work.
 7. **Mac desktop:** opening files from Finder, a second window, copying between circuits and recent files.
 8. **Graphs window:** pages, cursors, tables, expressions and saved results.
 9. **Instruments:**

@@ -1,4 +1,5 @@
 // Built-in parts. Symbols and generic device models are original to this project.
+import { studentParts } from "./student-parts";
 import type { Graphic, IndicatorSpec, InstrumentKind, Pin } from "./schematic";
 
 export interface ParamDef {
@@ -499,4 +500,5 @@ PARTS.push({
   graphics:[rect(-70,-130,140,260),text(-25,-140,'8051'),...Array.from({length:32},(_,i)=>[line(i<16?-90:70,(i%16)*15-112.5,i<16?-70:90,(i%16)*15-112.5),text(i<16?-65:38,(i%16)*15-109,`P${i>>>3}.${i&7}`,8)]).flat(),line(0,130,0,145),text(-10,125,'RST',8)],
   valueParam:'frequency',
 });
+PARTS.push(...studentParts(PARTS));
 export const PART_BY_KIND = new Map(PARTS.map((p) => [p.kind, p]));
