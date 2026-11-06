@@ -14,7 +14,8 @@ export interface BomRow {
 }
 
 const natural = (a: string, b: string) => a.localeCompare(b, "en", { numeric: true });
-const physicalPart = (c: SchComponent) => c.kind !== "ground" && !c.instrument
+// Ground and supply-rail symbols name a net; they are not parts anyone buys.
+const physicalPart = (c: SchComponent) => c.kind !== "ground" && c.kind !== "vcc" && !c.instrument
   && !PART_BY_KIND.get(c.kind)?.instrument && c.pins.length > 0;
 const valueOf = (c: SchComponent) => c.params[c.valueKey ?? PART_BY_KIND.get(c.kind)?.valueParam ?? "value"] ?? shownValue(c) ?? "";
 // Custom model blocks can share a display value while using different SPICE models.

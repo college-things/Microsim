@@ -161,7 +161,7 @@ describe("KiCad netlist", () => {
     expect(section("version")).toEqual(["version", "E"]);
     const components = section("components").slice(1) as Expr[][];
     const refs = components.map((c) => (c[1] as Expr[])[1]);
-    const included = schematic.components.filter((c) => c.kind !== "ground" && !c.instrument && c.pins.length);
+    const included = schematic.components.filter((c) => c.kind !== "ground" && c.kind !== "vcc" && !c.instrument && c.pins.length);
     expect(refs).toHaveLength(included.length);
     const pinNets = buildNetlist(schematic).pinNets;
     const codes = new Set<string>();
@@ -193,5 +193,13 @@ describe("KiCad netlist", () => {
     expect(output).toContain('(footprint "Custom:\\"small\\"")');
     expect(output).not.toContain("(node");
     expect(parseSexpr(kicadNetlist(new Doc().schematic))[0]).toBe("export");
+  });
+});
+
+describe("bill of materials rails", () => {
+  it("leaves supply-rail symbols out, as it does ground", () => {
+    const rows = billOfMaterials(buildExample(EXAMPLES.find((e) => e.name === "Common-emitter amplifier")!));
+    expect(rows.some((r) => r.kind === "vcc")).toBe(false);
+    expect(rows.some((r) => r.references.includes("Q1"))).toBe(true);
   });
 });
