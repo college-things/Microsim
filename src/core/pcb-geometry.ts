@@ -14,6 +14,12 @@ export function segmentDistance(a:Point,b:Point,c:Point,d:Point):number{
 }
 // All supported pad shapes are a rotated rectangle swept by a circle. Degenerate cores are intentional.
 export interface CopperShape { core:Point[]; radius:number }
+export function pointShapeDistance(p:Point,shape:CopperShape):number{
+ if(inside(p,shape.core))return -shape.radius;
+ let d=Infinity;
+ for(let i=0;i<shape.core.length;i++)d=Math.min(d,pointSegment(p,shape.core[i],shape.core[(i+1)%shape.core.length]));
+ return d-shape.radius;
+}
 export function padShape(f:Footprint,p:Pad,expand=0):CopperShape{
  const s=padSize(p),kind=p.shape??'circle',r=kind==='circle'?Math.min(s.x,s.y)/2:kind==='oval'?Math.min(s.x,s.y)/2:kind==='roundrect'?Math.min(s.x,s.y)*0.25:0;
  const x=s.x/2-r,y=s.y/2-r;

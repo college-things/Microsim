@@ -1,5 +1,5 @@
 import { validateWorkspace, type Board, type Track, type Via } from './engineering';
-import { boardPads, boardSegments, inside, lineShape, shapeDistance, type CopperShape } from './pcb-geometry';
+import { boardPads, boardSegments, inside, lineShape, pointShapeDistance, type CopperShape } from './pcb-geometry';
 import type { Point } from './schematic';
 
 export interface RouteOptions { width?:number; maxMs?:number; retries?:number }
@@ -46,7 +46,7 @@ export function autoroute(input:Board,options:RouteOptions={},progress?:(p:Route
    const obstacles:{shape:CopperShape;layers:number[]}[]=[...pads.filter(p=>p.net!==task.net).map(p=>({shape:p.shape,layers:p.layers.map(l=>l==='F.Cu'?0:1)})),...segments.filter(s=>s.net!==task.net).map(s=>({shape:s.shape,layers:[s.layer==='F.Cu'?0:1]})),...(board.vias??[]).filter(v=>v.net!==task.net).map(v=>({shape:lineShape(v,v,v.diameter),layers:[0,1]}))];
    const paint=(shape:CopperShape,layers:number[],extra:number,target:Uint8Array)=>{
     const r=shape.radius+extra,minX=Math.max(0,Math.floor((Math.min(...shape.core.map(p=>p.x))-r)/step)),maxX=Math.min(nx-1,Math.ceil((Math.max(...shape.core.map(p=>p.x))+r)/step)),minY=Math.max(0,Math.floor((Math.min(...shape.core.map(p=>p.y))-r)/step)),maxY=Math.min(ny-1,Math.ceil((Math.max(...shape.core.map(p=>p.y))+r)/step));
-    for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++){const p={x:x*step,y:y*step};if(shapeDistance(lineShape(p,p),shape)<extra)for(const layer of layers)target[layer*area+y*nx+x]=1;}
+    for(let y=minY;y<=maxY;y++)for(let x=minX;x<=maxX;x++){const p={x:x*step,y:y*step};if(pointShapeDistance(p,shape)<extra)for(const layer of layers)target[layer*area+y*nx+x]=1;}
    };
    for(const o of obstacles){paint(o.shape,o.layers,board.clearance+width/2+margin,blocked);paint(o.shape,o.layers,board.clearance+0.4+margin,viaBlocked);}
    for(const k of board.keepouts??[]){const layers=k.layer==='both'?[0,1]:[k.layer==='F.Cu'?0:1];
