@@ -6,7 +6,8 @@ export class PicAsmError extends Error {constructor(readonly line:number,message
 const byteOps:Record<string,number>={SUBWF:0x200,DECF:0x300,IORWF:0x400,ANDWF:0x500,XORWF:0x600,ADDWF:0x700,MOVF:0x800,COMF:0x900,INCF:0xa00,DECFSZ:0xb00,RRF:0xc00,RLF:0xd00,SWAPF:0xe00,INCFSZ:0xf00};
 const bitOps:Record<string,number>={BCF:0x1000,BSF:0x1400,BTFSC:0x1800,BTFSS:0x1c00};
 const literalOps:Record<string,number>={MOVLW:0x3000,RETLW:0x3400,IORLW:0x3800,ANDLW:0x3900,XORLW:0x3a00,SUBLW:0x3c00,ADDLW:0x3e00,CALL:0x2000,GOTO:0x2800};
-const fixed:Record<string,number>={NOP:0,RETURN:8,RETFIE:9,SLEEP:0x63,CLRWDT:0x64,CLRW:0x100};
+// Match gpasm's canonical CLRW word; the low seven bits are ignored by the CPU.
+const fixed:Record<string,number>={NOP:0,RETURN:8,RETFIE:9,SLEEP:0x63,CLRWDT:0x64,CLRW:0x103};
 const directives=['CONSTANT','VARIABLE','EQU','SET','CBLOCK','ENDC','ORG','END','__CONFIG','BANKSEL','PAGESEL','DT','DW','RADIX','LIST','PROCESSOR','ERRORLEVEL','#INCLUDE','INCLUDE'];
 const known=new Set([...Object.keys(byteOps),...Object.keys(bitOps),...Object.keys(literalOps),...Object.keys(fixed),'MOVWF','CLRF',...directives]);
 function definitions(variant:PicVariant):Map<string,number>{

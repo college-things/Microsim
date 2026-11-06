@@ -6,7 +6,7 @@ const words=(s:string)=>Array.from(picWords(assemblePic(s).code,'pic16f84a'));
 describe('PIC assembler',()=>{
   it('encodes all 35 instructions with independently specified words',()=>{
     const source=['ADDWF 20,W','ANDWF 20,F','CLRF 20','CLRW','COMF 20,0','DECF 20,1','DECFSZ 20,0','INCF 20,1','INCFSZ 20,0','IORWF 20,1','MOVF 20,0','MOVWF 20','NOP','RLF 20,1','RRF 20,0','SUBWF 20,1','SWAPF 20,0','XORWF 20,1','BCF 20,2','BSF 20,2','BTFSC 20,2','BTFSS 20,2','ADDLW 42','ANDLW 42','CALL 42','CLRWDT','GOTO 42','IORLW 42','MOVLW 42','RETFIE','RETLW 42','RETURN','SLEEP','SUBLW 42','XORLW 42'].join('\n');
-    expect(words(source)).toEqual([0x720,0x5a0,0x1a0,0x100,0x920,0x3a0,0xb20,0xaa0,0xf20,0x4a0,0x820,0xa0,0,0xda0,0xc20,0x2a0,0xe20,0x6a0,0x1120,0x1520,0x1920,0x1d20,0x3e42,0x3942,0x2042,0x64,0x2842,0x3842,0x3042,9,0x3442,8,0x63,0x3c42,0x3a42]);
+    expect(words(source)).toEqual([0x720,0x5a0,0x1a0,0x103,0x920,0x3a0,0xb20,0xaa0,0xf20,0x4a0,0x820,0xa0,0,0xda0,0xc20,0x2a0,0xe20,0x6a0,0x1120,0x1520,0x1920,0x1d20,0x3e42,0x3942,0x2042,0x64,0x2842,0x3842,0x3042,9,0x3442,8,0x63,0x3c42,0x3a42]);
   });
   it('supports MPASM radixes, decimal dot notation, and decimal or hexadecimal defaults',()=>{expect(words("MOVLW 10\nMOVLW H'10'\nMOVLW 0x10\nMOVLW B'10'\nMOVLW D'10'\nMOVLW .10\nRADIX DEC\nMOVLW 10\nRADIX HEX\nMOVLW 10h")).toEqual([0x3010,0x3010,0x3010,0x3002,0x300a,0x300a,0x300a,0x3010]);});
   it('resolves labels, EQU, CBLOCK, BANKSEL, PAGESEL, ORG and listing word addresses',()=>{
