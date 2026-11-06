@@ -1,3 +1,8 @@
+import { FOOTPRINTS, changeFootprint } from '../core/footprints';
+import { flattenCircuit } from '../core/hierarchy';
+import { padDrill, padSize } from '../core/pcb-geometry';
+import { boardSilkscreen } from '../core/pcb-silk';
+import type { RouteResult, RouteProgress } from '../core/autoroute';
 import type { Doc } from "../core/doc";
 import { boardFromSchematic, boardToKicad, C_EXAMPLE, checkBoard, padPosition, VHDL_EXAMPLE, type DesignWorkspace } from "../core/engineering";
 import { readComponentDatabase, registerDatabase, writeComponentDatabase, type DatabasePart } from "../core/component-database";
@@ -12,7 +17,9 @@ import { FlowRuntime } from '../core/dataflow';
 import { dataflowEditor } from './dataflow';
 import { readIntelHex, programHex } from '../engine/ihex';
 import { assemble51 } from '../engine/asm51';
-import { isMcu8051 } from '../importer/mcu';
+import { assemblePic } from '../engine/asmpic';
+import { picWords, type PicVariant } from '../engine/pic16';
+import { isMcu, isMcuPic, isMcu8051 } from '../importer/mcu';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text = "") => { const n = document.createElement(tag); n.textContent = text; return n; };
 const button = (text: string, action: () => void) => { const b = el("button", text); b.type = "button"; b.onclick = action; return b; };
@@ -35,11 +42,13 @@ export class DesignUI {
   }
   reset() { this.stopExchange?.(); }
   pcb() {
+    let router:Worker|undefined;
+    const stopRouter=()=>{router?.terminate();router=undefined;};
     this.dialog("PCB layout", (box, close) => {
       box.classList.add("design-dialog");
       let board = boardFromSchematic(this.doc.schematic, this.doc.schematic.workspace?.board);
       let selected: { net: string; at: { x: number; y: number } } | undefined;
-      const info = el("p", "Dimensions in mm. Starting pads are 1.6 mm through-hole, 0.8 mm drill, on 2.54 mm pitch. Edit pad coordinates to match your actual package. Click two same-net pads to route; empty space adds a corner. Right-click cancels.");
+      const info = el("p", "Dimensions in mm. Check the selected package and pin numbers against your actual part. Supply pads absent from the symbol need explicit net assignment below. Click two same-net pads to route; empty space adds a corner. Right-click cancels.");
       const controls = el("div"); controls.className = "design-controls";
       const width = field(controls, "Width (mm)", String(board.width), "number"), height = field(controls, "Height (mm)", String(board.height), "number");
       const clearance = field(controls, "Clearance (mm)", String(board.clearance), "number");
@@ -51,8 +60,8 @@ export class DesignUI {
       const view = document.createElementNS("http://www.w3.org/2000/svg", "svg"); view.classList.add("pcb-board"); view.setAttribute("role", "group"); view.setAttribute("aria-label", "PCB pads and copper tracks");
       const table = el("div");
       let path: { x: number; y: number }[] = [];
-      const routingHistory:{tracks:number;vias:number}[]=[];
-      const rememberRoute=()=>routingHistory.push({tracks:board.tracks.length,vias:board.vias?.length??0});
+      const routingHistory:{tracks:typeof board.tracks;vias:typeof board.vias}[]=[];
+      const rememberRoute=()=>routingHistory.push(structuredClone({tracks:board.tracks,vias:board.vias}));
       const route = (net: string, at: { x: number; y: number }) => {
         if (!selected) { selected = { net, at }; path = [at]; status.textContent = `Routing ${net}. Click a same-net pad to finish.`; }
         else if (selected.net !== net) status.textContent = "Choose a pad on the same net.";
@@ -67,6 +76,9 @@ export class DesignUI {
       const draw = () => {
         view.replaceChildren(); view.setAttribute("viewBox", `-3 -3 ${board.width + 6} ${board.height + 6}`);
         shape("rect", { x: "0", y: "0", width: String(board.width), height: String(board.height), fill: "#143c30", stroke: "#76ad88", "stroke-width": "0.2" });
+        for(const z of board.zones??[])shape('polygon',{points:z.outline.map(p=>`${p.x},${p.y}`).join(' '),fill:z.layer==='F.Cu'?'#ff897b':'#82acff',opacity:'0.15'});
+        for(const k of board.keepouts??[])shape('polygon',{points:k.outline.map(p=>`${p.x},${p.y}`).join(' '),fill:'#ffcc44',opacity:'0.3',stroke:'#ffcc44','stroke-width':'0.2'});
+        for(const s of boardSilkscreen(board))shape('line',{x1:String(s.a.x),y1:String(s.a.y),x2:String(s.b.x),y2:String(s.b.y),stroke:'white','stroke-width':String(s.width)});
         const pads = board.footprints.flatMap((f) => f.pads.map((p) => ({ ...padPosition(f, p), net: p.net })));
         for (const net of new Set(pads.map((p) => p.net))) {
           const group = pads.filter((p) => p.net === net);
@@ -80,10 +92,13 @@ export class DesignUI {
         }
         if (path.length) shape("polyline", { points: path.map((p) => `${p.x},${p.y}`).join(" "), stroke: "white", "stroke-width": "0.3", fill: "none" });
         for (const f of board.footprints) {
-          const label = shape("text", { x: String(f.x), y: String(f.y - 2), fill: "white", "font-size": "1.8" }); label.textContent = f.ref;
+          if(!f.outline){const label = shape("text", { x: String(f.x), y: String(f.y - 2), fill: "white", "font-size": "1.8" }); label.textContent = f.ref;}
           for (const p of f.pads) {
             const at = padPosition(f, p);
-            const dot = shape("circle", { cx: String(at.x), cy: String(at.y), r: String((p.diameter??1.6)/2), fill: "#eac968", stroke: "#151a16", "stroke-width": "0.2", tabindex: "0", role: "button", "aria-label": `${f.ref}.${p.pin}: ${p.net}` });
+            const size=padSize(p),kind=p.shape??'circle';
+            const attrs={fill:'#eac968',stroke:'#151a16','stroke-width':'0.1',tabindex:'0',role:'button','aria-label':`${f.ref}.${p.pin} (pad ${p.number??p.pin}): ${p.net}`};
+            const dot=kind==='circle'?shape('circle',{...attrs,cx:String(at.x),cy:String(at.y),r:String(size.x/2)}):shape('rect',{...attrs,x:String(at.x-size.x/2),y:String(at.y-size.y/2),width:String(size.x),height:String(size.y),rx:String(kind==='rect'?0:Math.min(size.x,size.y)*(kind==='oval'?0.5:0.25)),transform:`rotate(${f.rotation} ${at.x} ${at.y})`});
+            const drill=padDrill(p);if(drill!==undefined)shape('circle',{cx:String(at.x),cy:String(at.y),r:String(drill/2),fill:'#143c30','pointer-events':'none'});
             const title = document.createElementNS(view.namespaceURI, "title"); title.textContent = `${f.ref}.${p.pin}: ${p.net}`; dot.append(title);
             dot.addEventListener("click", (e) => { e.stopPropagation(); route(p.net, at); });
             dot.addEventListener("keydown", (event) => { const e = event as KeyboardEvent; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); route(p.net, at); } });
@@ -101,13 +116,19 @@ export class DesignUI {
       const dimensions = () => {
         const values = [width, height, clearance].map((input) => Number(input.value));
         if (values.some((n) => !(n > 0 && n <= 10000))) { status.textContent = "Dimensions must be positive and at most 10000 mm."; return; }
-        [board.width, board.height, board.clearance] = values; draw();
+        [board.width, board.height, board.clearance] = values; if(pourNet.value.trim())updatePour();else draw();
       };
       width.onchange = height.onchange = clearance.onchange = dimensions;
       const placements = () => {
         table.replaceChildren();
+        const components=flattenCircuit(this.doc.schematic).components;
         for (const f of board.footprints) {
           const row = el("div"); row.className = "design-controls"; row.append(el("strong", f.ref));
+          const component=components.find(c=>c.id===f.component)!;
+          const pkg=el('select');pkg.setAttribute('aria-label',`${f.ref} footprint`);
+          if(!f.name){const o=el('option','Saved generic pads');o.value='';pkg.append(o);}
+          for(const name of Object.keys(FOOTPRINTS)){const o=el('option',name);o.value=name;pkg.append(o);}pkg.value=f.name??'';
+          pkg.onchange=()=>{try{if(pkg.value){changeFootprint(f,component,pkg.value);placements();draw();}}catch(e){status.textContent=String(e);pkg.value=f.name??'';}};row.append(pkg);
           for (const key of ["x", "y", "rotation"] as const) {
             const input = field(row, `${f.ref} ${key}`, String(f[key]), "number");
             input.onchange = () => { const n = Number(input.value); if (Number.isFinite(n) && Math.abs(n) <= 10000) { f[key] = n; draw(); } };
@@ -118,23 +139,47 @@ export class DesignUI {
             if (coords.length !== f.pads.length || coords.some((v) => v.length !== 2 || v.some((n) => !Number.isFinite(n) || Math.abs(n) > 10000))) { status.textContent = "Provide one x,y pair per pad."; return; }
             coords.forEach(([x, y], i) => Object.assign(f.pads[i], { x, y })); draw();
           };
-          for(const key of ['diameter','drill'] as const){
+          for(const p of f.pads){
+            const label=`${f.ref} pad ${p.number??p.pin} (${p.pin})`;
+            const net=field(row,`${label} net`,p.net);net.onchange=()=>{p.net=net.value.trim()||`nc_${f.component}_${p.pin}`;draw();};
+          }
+          if(!f.name)for(const key of ['diameter','drill'] as const){
             const input=field(row,`${f.ref} pad ${key} (mm)`,String(f.pads[0]?.[key]??(key==='diameter'?1.6:0.8)),'number');
             input.onchange=()=>{const n=Number(input.value);if(!Number.isFinite(n)||n<=0||f.pads.some(p=>key==='diameter'?n<=(p.drill??0.8):n>=(p.diameter??1.6))){status.textContent='Pad diameter must exceed its positive drill diameter.';return;}for(const p of f.pads)p[key]=n;draw();};
           }
           table.append(row);
         }
       };
+      const pourNet=field(controls,'Pour net (blank disables)',board.zones?.[0]?.net??'');
+      const pourLayer=el('select');pourLayer.setAttribute('aria-label','Pour layer');
+      for(const name of ['F.Cu','B.Cu']){const o=el('option',name);o.value=name;pourLayer.append(o);}pourLayer.value=board.zones?.[0]?.layer??'B.Cu';controls.append(pourLayer);
+      const updatePour=()=>{const net=pourNet.value.trim(),m=board.clearance;board.zones=net?[{net,layer:pourLayer.value as 'F.Cu'|'B.Cu',outline:[{x:m,y:m},{x:board.width-m,y:m},{x:board.width-m,y:board.height-m},{x:m,y:board.height-m}]}]:[];draw();};
+      pourNet.onchange=pourLayer.onchange=updatePour;
+      const keepout=field(controls,'Keep-out rectangle x,y,width,height','');
+      controls.append(button('Add keep-out on selected layer',()=>{const n=keepout.value.split(',').map(Number);if(n.length!==4||n.some(v=>!Number.isFinite(v))||n[2]<=0||n[3]<=0){status.textContent='Enter x,y,width,height with positive width and height.';return;}const [x,y,w,h]=n;board.keepouts??=[];board.keepouts.push({layer:layer.value as 'F.Cu'|'B.Cu',outline:[{x,y},{x:x+w,y},{x:x+w,y:y+h},{x,y:y+h}]});draw();}),button('Clear keep-outs',()=>{board.keepouts=[];draw();}));
       const actions = el("div"); actions.className = "dialog-actions";
-      actions.append(button("Cancel", close), button("Undo route", () => {const previous=routingHistory.pop();if(previous){board.tracks.length=previous.tracks;if(board.vias)board.vias.length=previous.vias;}selected=undefined;path=[];draw();}),button('Place via / switch layer',()=>{
+      actions.append(button('Autoroute',()=>{
+        if(router)return;
+        const snapshot=structuredClone(board);
+        router=new Worker(new URL('../core/autoroute.worker.ts',import.meta.url),{type:'module'});
+        router.onmessage=(event:MessageEvent<{progress?:RouteProgress;result?:RouteResult;error?:string}>)=>{
+          const {progress,result,error}=event.data;
+          if(progress)status.textContent=`Routing ${progress.completed}/${progress.total}, attempt ${progress.attempt}...`;
+          if(error){stopRouter();status.textContent=error;}
+          if(result){stopRouter();if(JSON.stringify(board)!==JSON.stringify(snapshot)){status.textContent='Layout changed while routing. Run Autoroute again for the current layout.';return;}rememberRoute();board=result.board;selected=undefined;path=[];draw();status.textContent+=`\nAutoroute: ${result.connections-result.unrouted.length}/${result.connections} connections in ${(result.elapsedMs/1000).toFixed(2)} s.`;if(result.unrouted.length)status.textContent+=`\nUnrouted:\n${result.unrouted.join('\n')}`;}
+        };
+        router.onerror=e=>{stopRouter();status.textContent=e.message||'Autorouter failed.';};
+        router.postMessage({board:snapshot,options:{width:0.25}});
+      }),button('Cancel autoroute',()=>{stopRouter();draw();status.textContent+='\nRouting cancelled; layout kept.';}),button('Remove all tracks',()=>{stopRouter();rememberRoute();board.tracks=[];board.vias=[];selected=undefined;path=[];draw();}));
+      actions.append(button("Cancel", ()=>{stopRouter();close();}), button("Undo route", () => {const previous=routingHistory.pop();if(previous){board.tracks=previous.tracks;board.vias=previous.vias;}selected=undefined;path=[];draw();}),button('Place via / switch layer',()=>{
         if(!selected||!path.length){status.textContent='Start routing a pad and click the via position first.';return;}
         const at=path[path.length-1],n=Number(trackWidth.value);if(!(n>0&&Number.isFinite(n))){status.textContent='Track width must be positive.';return;}
         rememberRoute();board.vias??=[];board.vias.push({...at,net:selected.net,diameter:0.8,drill:0.4});
         if(path.length>1)board.tracks.push({net:selected.net,layer:layer.value as 'F.Cu'|'B.Cu',width:n,points:[...path]});
         selected={net:selected.net,at};path=[at];layer.value=layer.value==='F.Cu'?'B.Cu':'F.Cu';draw();
-      }), button("Refresh from schematic", () => { board = boardFromSchematic(this.doc.schematic, board);routingHistory.length=0;selected=undefined;path=[]; placements(); draw(); }), button("Export KiCad board", () => { void saveFile(`${this.doc.schematic.name}.kicad_pcb`, "kicad_pcb", boardToKicad(board)).catch((e) => { status.textContent = String(e); }); }),button('Export Gerber / drill ZIP',()=>{try{void saveFile(`${this.doc.schematic.name}-fabrication.zip`,'zip',fabricationZip(boardFabricationFiles(board))).catch(e=>{status.textContent=String(e)});}catch(e){status.textContent=String(e);}}), button("Apply layout", () => { this.commit((w) => { w.board = structuredClone(board); }); close(); }));
+      }), button("Refresh from schematic", () => { board = boardFromSchematic(this.doc.schematic, board);routingHistory.length=0;selected=undefined;path=[]; placements(); draw(); }), button("Export KiCad board", () => { void saveFile(`${this.doc.schematic.name}.kicad_pcb`, "kicad_pcb", boardToKicad(board)).catch((e) => { status.textContent = String(e); }); }),button('Export Gerber / drill ZIP',()=>{try{void saveFile(`${this.doc.schematic.name}-fabrication.zip`,'zip',fabricationZip(boardFabricationFiles(board))).catch(e=>{status.textContent=String(e)});}catch(e){status.textContent=String(e);}}), button("Apply layout", () => { this.commit((w) => { w.board = structuredClone(board); }); stopRouter();close(); }));
       box.append(info, controls, view, table, status, actions); placements(); draw();
-    });
+    },stopRouter);
   }
   compiler(language: "c" | "vhdl") {
     let abort: AbortController | undefined;
@@ -212,23 +257,23 @@ export class DesignUI {
       box.append(output, downloads, actions);
     }, () => abort?.abort());
   }
-  /** Loads assembly source or Intel HEX into a built-in or converted NI 8051, with no external tools. */
+  /** Loads source or Intel HEX into a supported MCU, with no external tools. */
   mcuProgram() {
     this.dialog("Microcontroller program", (box, close) => {
       box.classList.add("design-dialog");
-      const parts = this.doc.schematic.components.filter(isMcu8051);
+      const parts = this.doc.schematic.components.filter(isMcu);
       if (!parts.length) {
-        box.append(el("p", "This circuit has no 8051 microcontroller. Place an 8051 firmware core from the Digital palette, or open a Multisim circuit that has an 8051 or 8052."));
+        box.append(el("p", "This circuit has no microcontroller. Place an 8051 or PIC16 firmware core from the Digital palette, or open a circuit with a supported NI MCU."));
         const actions = el("div"); actions.className = "dialog-actions"; actions.append(button("Close", close)); box.append(actions);
         return;
       }
-      box.append(el("p", "Assemble classic Intel-syntax 8051 source (as written for Multisim's MCU workspaces) or load an Intel HEX file. Assembly runs here, with no other software. Generic JMP and CALL assemble as LJMP and LCALL, which take the same time as the short forms."));
+      box.append(el("p", "Assemble Intel-syntax 8051 or MPASM-style PIC16 source, or load Intel HEX. Assembly runs here with no other software. PIC addresses count words; HEX addresses count bytes."));
       const config = el("div"); config.className = "design-controls";
       const target = el("select"); target.setAttribute("aria-label", "Microcontroller");
-      for (const comp of parts) { const option = el("option", `${comp.refDes}${comp.params.mcu === "8051" ? " (imported NI part)" : ""}`); option.value = comp.id; target.append(option); }
+      for (const comp of parts) { const option = el("option", `${comp.refDes}${comp.params.mcu ? " (imported NI part)" : ""}`); option.value = comp.id; target.append(option); }
       config.append(target);
       const expected = el("p"); expected.className = "muted";
-      const source = el("textarea"); source.className = "design-source"; source.setAttribute("aria-label", "8051 assembly source");
+      const source = el("textarea"); source.className = "design-source"; source.setAttribute("aria-label", "Microcontroller assembly source");
       const output = el("pre"); output.className = "design-status";
       const current = () => this.doc.schematic.components.find((c) => c.id === target.value);
       const describe = () => {
@@ -241,18 +286,24 @@ export class DesignUI {
         output.textContent = bytes ? `${comp.refDes} holds a ${bytes}-byte program.` : `${comp.refDes} has no program yet.`;
       };
       target.onchange = describe;
-      const load = (code: Uint8Array, asm: string | undefined, note: string) => {
+      const load = (code: Uint8Array, asm: string | undefined, note: string, config?: number) => {
         const comp = current();
         if (!comp) throw new Error("The microcontroller was removed.");
-        let end = code.length; while (end > 1 && code[end - 1] === 255) end--;
+        const pic=isMcuPic(comp),variant=(comp.params.variant??comp.kind) as PicVariant;
+        if(pic)picWords(code,variant);
+        let end = pic?Math.min(code.length,variant==='pic16f84a'?2048:16384):code.length;
+        if(pic){while(end>2&&code[end-1]===255&&code[end-2]===255)end-=2;}
+        else while(end>1&&code[end-1]===255)end--;
         this.doc.checkpoint();
         comp.params.code = programHex(code.slice(0, end));
+        if(pic){const word=code.length>0x400f?(code[0x400e]|(code[0x400f]<<8)):0xffff;comp.params.config=String(config??(asm===undefined&&word!==0xffff?word&0x3fff:-1));}
         if (asm === undefined) delete comp.params.asm; else comp.params.asm = asm;
         this.doc.notify();
         output.textContent = `${note} ${end} bytes loaded into ${comp.refDes}. Run the circuit to execute it.`;
       };
       const assemble = () => {
-        try { const result = assemble51(source.value); load(result.code, source.value, `Assembled ${result.listing.length} instructions.`); }
+        try { const comp=current(); const result = comp&&isMcuPic(comp)?assemblePic(source.value,(comp.params.variant??comp.kind) as PicVariant):assemble51(source.value);
+          load(result.code, source.value, "Program assembled.", "config" in result&&typeof result.config==="number"?result.config:undefined); }
         catch (e) { output.textContent = `Not loaded. ${e instanceof Error ? e.message : String(e)}`; }
       };
       const actions = el("div"); actions.className = "dialog-actions";

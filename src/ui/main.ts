@@ -4,7 +4,7 @@ import { acDecibels, acSignals, findVector, sweepValues, type AnalysisPlan, type
 import { Doc, newId } from "../core/doc";
 import { PART_BY_KIND, PARTS } from "../core/library";
 import { KEYPAD_KEYS, buildNetlist, changesOverTime, frequencyProblem, listSources, parseValue, pinNetsKey, pinWorld, readValue, resolveSource, runSignature } from "../core/netlist";
-import type { ImportIssue, SchComponent, Schematic } from "../core/schematic";
+import { circuitPages, type ImportIssue, type SchComponent, type Schematic } from "../core/schematic";
 import type { AnalysisRequest, SimResult } from "../core/sim";
 import { runSimulation, runPlannedSimulation, stopSimulation } from "../sim/client";
 import { LiveBuffer, LiveRun } from "../sim/live";
@@ -16,7 +16,7 @@ import { resultToCsv, runsToCsv, schematicToSvg } from "../core/export";
 import { truthTable } from "../core/logic";
 import { CharacterLcd } from "../core/lcd";
 import { createDebugger, type DebugCommand, type DebuggerView } from "./debugger";
-import { isMcu8051 } from "../importer/mcu";
+import { isMcu } from "../importer/mcu";
 import { ivCurves, type IvMode } from "../core/ivcurves";
 import { billOfMaterials, bomToCsv, bomToHtml, electricalRulesCheck, kicadNetlist } from "../core/reports";
 import { indicatorParts, indicatorVectors, readIndicator } from "../core/indicators";
@@ -29,7 +29,7 @@ import { renderMarkdown } from "./markdown";
 import { formatSI, Plot, redrawPlots, seriesStyle, type Series } from "./plot";
 import { DesignUI } from "./design";
 import { serializeMs14 } from "../importer/writer";
-import { PAPER_SIZES, printPageToPdf, renderPrintPage, type PaperSize, type PrintOptions, type PrintPage } from "../core/print";
+import { PAPER_SIZES, printPagesToPdf, renderPrintPages, type PaperSize, type PrintOptions, type PrintPage } from "../core/print";
 import type { TitleBlock } from "../core/schematic";
 
 const FILE_EXTENSION = "microsim";
@@ -108,6 +108,92 @@ const spreadsheet = el("section", { className: "spreadsheet" });
 center.append(sheetHost, spreadsheet);
 
 const canvas = new SchematicCanvas(sheetHost, doc);
+const pageBar = el("div", { className: "tabs", role: "tablist", ariaLabel: "Circuit pages and blocks" });
+center.insertBefore(pageBar, sheetHost);
+
+function switchSheet(action: () => void): void {
+  commitTypedValue();
+  canvas.select([]);
+  canvas.cancelTool();
+  action();
+  canvas.fit(clearArea(sheetHost));
+}
+
+function renderPageTabs(): void {
+  pageBar.replaceChildren();
+  const button = (text: string, action: () => void) => el("button", { textContent: text, onclick: action });
+  circuitPages(doc.schematic).forEach((page, i) => {
+    const tab = button(page.name, () => switchSheet(() => doc.openPage(i)));
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(!doc.blockPath.length && doc.activePage === i));
+    pageBar.append(tab);
+  });
+  pageBar.append(button("+ Page", () => askText("Add page", "Page name", (name) => switchSheet(() => doc.addPage(name)))));
+  if (doc.blockPath.length) {
+    pageBar.append(button("Back to page", () => switchSheet(() => doc.openPage(doc.activePage))));
+    doc.blockPath.forEach((id, i) => {
+      const block = doc.schematic.blocks?.find((b) => b.id === id);
+      if (block) pageBar.append(button(`› ${block.name}`, () => switchSheet(() => { doc.blockPath = doc.blockPath.slice(0, i + 1); doc.notify(); })));
+    });
+  } else {
+    pageBar.append(button("Rename", () => askText("Rename page", "Page name", (name) => doc.renamePage(doc.activePage, name))));
+    pageBar.append(button("←", () => { if (doc.activePage > 0) switchSheet(() => doc.movePage(doc.activePage, doc.activePage - 1)); }));
+    pageBar.append(button("→", () => { if (doc.activePage < (doc.schematic.pages?.length ?? 0)) switchSheet(() => doc.movePage(doc.activePage, doc.activePage + 1)); }));
+    if (doc.schematic.pages?.length) pageBar.append(button("Delete page", () => {
+      const remove = () => switchSheet(() => doc.deletePage(doc.activePage));
+      if (!doc.sheet.components.length && !doc.sheet.wires.length && !doc.sheet.labels.length && !doc.sheet.texts.length) { remove(); return; }
+      dialog("Delete page?", (box, close) => box.append(el("p", { textContent: `Delete “${doc.sheet.name}” and everything on it? You can undo this.` }), el("div", { className: "dialog-actions" }, button("Cancel", close), button("Delete page", () => { remove(); close(); }))));
+    }));
+  }
+}
+
+function createBlockDialog(): void {
+  commitTypedValue();
+  const selection = new Set(canvas.selection);
+  askText("Replace by hierarchical block", "Block name", (name) => {
+    // Build on a temporary document so the port names are reviewable before the edit.
+    const draft = new Doc();
+    draft.schematic = structuredClone(doc.schematic);
+    draft.activePage = doc.activePage; draft.blockPath = [...doc.blockPath];
+    try {
+      const proposed = draft.createBlock(selection, name);
+      const definition = draft.schematic.blocks!.find((b) => b.id === proposed.blockId)!;
+      dialog("Block pins", (box, close) => {
+        const ports = definition.components.filter((c) => c.kind === "hierarchy-port");
+        const fields = ports.map((p) => {
+          const input = el("input", { value: p.params.name, ariaLabel: `Pin ${p.params.name}` });
+          box.append(el("label", { className: "field" }, p.params.name, input));
+          return input;
+        });
+        box.append(el("p", { textContent: "Ports connect the block to the rest of the circuit. Double-click a placed block to edit its shared definition." }), el("button", { textContent: "Create block", onclick: () => {
+          try {
+            const names = Object.fromEntries(ports.map((p, i) => [p.pins[0].net!, fields[i].value]));
+            const instance = doc.createBlock(selection, name, names);
+            canvas.select([instance.id]); close();
+          } catch (error) { writeLog(friendly(error), "error"); }
+        } }));
+      });
+    } catch (error) { writeLog(friendly(error), "error"); }
+  });
+}
+
+function placeBlockDialog(): void {
+  dialog("Place hierarchical block", (box, close) => {
+    if (!doc.schematic.blocks?.length) box.append(el("p", { textContent: "Select parts and use Replace by hierarchical block to create a definition first." }));
+    for (const block of doc.schematic.blocks ?? []) box.append(el("button", { textContent: block.name, onclick: () => {
+      try { canvas.beginPlace(`block:${block.id}`); close(); }
+      catch (error) { writeLog(friendly(error), "error"); }
+    } }));
+  });
+}
+
+function addPortDialog(): void {
+  if (!doc.blockPath.length) { writeLog("Open a block to add a port.", "warning"); return; }
+  askText("Add block port", "Port name", (name) => {
+    try { doc.addBlockPort(name, 0, 0); }
+    catch (error) { writeLog(friendly(error), "error"); }
+  });
+}
 canvas.onStatus = (text) => { statusText.textContent = text; };
 const limitsText = el("span");
 const limitsBanner = el("div", { className: "limits-banner", role: "alert", hidden: true }, limitsText,
@@ -198,7 +284,7 @@ const sheetTabs = tabs(spreadsheet, ["Results", "Components", "Netlist", "Issues
     table.innerHTML = "<thead><tr><th>Ref</th><th>Part</th><th>Value</th><th>Pins</th></tr></thead>";
     const rows = el("tbody");
     const nets = buildNetlist(doc.schematic).pinNets;
-    for (const comp of doc.schematic.components) {
+    for (const comp of doc.sheet.components) {
       const part = PART_BY_KIND.get(comp.kind);
       const pinText = [...(nets.get(comp.id) ?? new Map<string, string>())].map(([p, n]) => `${p}:${n}`).join("  ");
       const row = el("tr", { tabIndex: 0 },
@@ -281,12 +367,13 @@ function markResultsStale(): void {
 let lastSignature = "";
 let settingEdit = false;
 doc.subscribe(() => {
-  statusCount.textContent = `${doc.schematic.components.length} parts, ${doc.schematic.wires.length} wires`;
-  const { components, wires, labels, texts } = doc.schematic;
+  renderPageTabs();
+  statusCount.textContent = `${doc.sheet.components.length} parts, ${doc.sheet.wires.length} wires`;
+  const { components, wires, labels, texts } = doc.sheet;
   emptyHint.hidden = components.length + wires.length + labels.length + texts.length > 0;
   for (const [id, view] of views) {
     // Undo replaces every part object, so a window can't hold on to the one it opened with.
-    const part = doc.schematic.components.find((c) => c.id === id);
+    const part = circuitPages(doc.schematic).flatMap((p) => p.components).find((c) => c.id === id);
     if (part) {
       view.follow(part);
     } else {
@@ -364,6 +451,8 @@ partSearch.oninput = renderPalette;
 renderPalette();
 
 canvas.onActivate = (comp) => {
+  if (comp.kind === "hierarchy-port") { askText("Rename block port", "Port name", (name) => { try { doc.renameBlockPort(comp.id, name); } catch (error) { writeLog(friendly(error), "error"); } }); return; }
+  if (comp.blockId) { switchSheet(() => doc.openBlock(comp.blockId!)); return; }
   if (comp.interactive?.kind === "switch") {
     toggleSwitch(comp);
   } else if (comp.kind === "switch") {
@@ -421,7 +510,7 @@ function renderProperties(): void {
   body.replaceChildren();
   const wrap = el("div", { className: "pad" });
   body.append(wrap);
-  const selected = doc.schematic.components.filter((c) => canvas.selection.has(c.id));
+  const selected = doc.sheet.components.filter((c) => canvas.selection.has(c.id));
   if (selected.length !== 1) {
     wrap.append(el("p", {
       className: "muted",
@@ -450,7 +539,7 @@ function renderProperties(): void {
       ref.value = comp.refDes;
       return;
     }
-    const clash = doc.schematic.components.some((c) => c !== comp && c.refDes.toLowerCase() === name.toLowerCase());
+    const clash = (doc.blockPath.length ? [doc.sheet] : circuitPages(doc.schematic)).flatMap((p) => p.components).some((c) => c !== comp && c.refDes.toLowerCase() === name.toLowerCase());
     if (!name || clash || !/^[\w.+-]+$/.test(name)) {
       report(ref, !name ? "A part needs a name." : clash ? `${name} is already in use.` : "Use letters, numbers, dots, dashes or underscores.");
       ref.value = comp.refDes;
@@ -580,9 +669,9 @@ async function refreshSnapshots(netlist: string): Promise<void> {
     logWarnings(op.warnings);
     lastOpRows = op.vectors.map((v) => [v.name, v.re[0], v.unit]);
     // Wires the live data doesn't carry show this operating point instead.
-    showProbes(op, doc.schematic, run.pinNets);
+    showProbes(op, doc.sheet, run.pinNets);
     canvas.invalidate();
-    const bode = doc.schematic.components.find((c) => c.instrument === "bode-plotter");
+    const bode = doc.sheet.components.find((c) => c.instrument === "bode-plotter");
     if (bode) {
       const ac = await runSimulation(netlist, {
         type: "ac", sweep: "dec", points: 40,
@@ -616,7 +705,7 @@ const buttonReleases = new Set<ReturnType<typeof setTimeout>>();
 
 /** Lets go of momentary buttons by id, since undo can replace the part objects meanwhile. */
 function releaseButtons(ids: string[]): void {
-  const parts = doc.schematic.components.filter((c) => ids.includes(c.id));
+  const parts = doc.sheet.components.filter((c) => ids.includes(c.id));
   if (parts.length) setInteractive(parts, () => 0);
 }
 
@@ -652,7 +741,7 @@ function pressKeypad(comp: SchComponent, key: string): void {
 function appendKeypad(wrap: HTMLElement, comp: SchComponent): void {
   const grid = el("div", { className: "keypad-grid" });
   const id = comp.id;
-  const part = () => doc.schematic.components.find((c) => c.id === id);
+  const part = () => doc.sheet.components.find((c) => c.id === id);
   for (const key of KEYPAD_KEYS) {
     const button = el("button", { textContent: key, ariaLabel: `Press ${key}` });
     // Held, not clicked: firmware scanning the keypad needs the key down long enough to see it.
@@ -665,7 +754,7 @@ function appendKeypad(wrap: HTMLElement, comp: SchComponent): void {
 
 function appendInteractive(wrap: HTMLElement, comp: SchComponent): void {
   if (comp.kind === "keypad4x4") { appendKeypad(wrap, comp); return; }
-  if (isMcu8051(comp)) wrap.append(el("button", { textContent: "Debug program", onclick: () => openDebugger(comp) }));
+  if (isMcu(comp)) wrap.append(el("button", { textContent: "Debug program", onclick: () => openDebugger(comp) }));
   const spec = comp.interactive;
   if (spec?.kind === "switch") {
     const hint = spec.key ? ` (key ${spec.key})` : "";
@@ -685,7 +774,7 @@ function appendInteractive(wrap: HTMLElement, comp: SchComponent): void {
 /** Wiring without a pointer: pick a pin and what it connects to. */
 function appendConnections(wrap: HTMLElement, comp: SchComponent): void {
   if (!comp.pins.length) return;
-  const others = doc.schematic.components.filter((c) => c !== comp && c.refDes);
+  const others = doc.sheet.components.filter((c) => c !== comp && c.refDes);
   const nets = buildNetlist(doc.schematic).pinNets.get(comp.id);
   const heading = el("h4", { textContent: "Connections" });
   heading.style.margin = "12px 0 6px";
@@ -700,7 +789,7 @@ function appendConnections(wrap: HTMLElement, comp: SchComponent): void {
     }
     target.onchange = () => {
       const [id, name] = target.value.split("|");
-      const other = doc.schematic.components.find((c) => c.id === id);
+      const other = doc.sheet.components.find((c) => c.id === id);
       if (!other) return;
       doc.checkpoint();
       const connected = doc.connectPins(comp, pin.name, other, name);
@@ -729,7 +818,7 @@ let lastRun: RunData | undefined;
 
 function keepScopeScales(): void {
   for (const id of scaledScopes) {
-    const part = doc.schematic.components.find((c) => c.id === id);
+    const part = doc.sheet.components.find((c) => c.id === id);
     const settings = scopeSettings.get(id);
     if (!part || !settings) continue;
     part.params.timePerDiv = String(settings.timePerDiv);
@@ -778,7 +867,7 @@ function openInstrument(comp: SchComponent): void {
     scaledScopes.add(comp.id);
     keepScopeScales();
     doc.dirty = true;
-    if (live) live.setRate(liveRate(doc.schematic.components.filter((c) => c.instrument), buildNetlist(doc.schematic).text));
+    if (live) live.setRate(liveRate(doc.sheet.components.filter((c) => c.instrument), buildNetlist(doc.schematic).text));
     else if (lastRun) view?.update(lastRun);
   };
   const running = () => live !== undefined;
@@ -799,7 +888,7 @@ function openInstrument(comp: SchComponent): void {
       commitTypedValue();
       const netlist = buildNetlist(doc.schematic);
       if (netlist.errors.length) throw new Error(netlist.errors[0]);
-      const part = doc.schematic.components.find((c) => c.id === id);
+      const part = doc.sheet.components.find((c) => c.id === id);
       const nets = netlist.pinNets.get(id);
       if (!part || !nets) throw new Error("The logic converter is no longer in the circuit.");
       const inputs = "ABCDEFGH".split("").flatMap((name) => (nets.get(name) ? [{ name, net: nets.get(name)! }] : []));
@@ -813,7 +902,7 @@ function openInstrument(comp: SchComponent): void {
       commitTypedValue();
       const netlist = buildNetlist(doc.schematic);
       if (netlist.errors.length) throw new Error(netlist.errors[0]);
-      const part = doc.schematic.components.find((c) => c.id === id);
+      const part = doc.sheet.components.find((c) => c.id === id);
       const nets = netlist.pinNets.get(id);
       if (!part || !nets) throw new Error("The IV analyzer is no longer in the circuit.");
       const steps = (part.params.steps ?? "").trim() ? part.params.steps.split(/[\s,;]+/).filter(Boolean).map((s) => readValue(s)) : undefined;
@@ -924,11 +1013,12 @@ async function simulateRun(): Promise<void> {
     return;
   }
   const schematic = doc.schematic;
+  const allComponents = circuitPages(schematic).flatMap((p) => p.components);
   const netlist = buildNetlist(schematic);
   log = [];
   lastOpRows = [];
   for (const warning of netlist.warnings) log.push({ text: warning, kind: "warning" });
-  if (!schematic.components.length) {
+  if (!allComponents.length) {
     writeLog("Place some parts first.", "warning");
     return;
   }
@@ -949,7 +1039,7 @@ async function simulateRun(): Promise<void> {
     showProbes(run.op, schematic, netlist.pinNets);
     updateIndicators(run, run.op);
 
-    const instruments = schematic.components.filter((c) => c.instrument);
+    const instruments = allComponents.filter((c) => c.instrument);
     const scopes = instruments.filter((c) => c.instrument === "oscilloscope");
     for (const scope of instruments.filter((c) => c.instrument === "oscilloscope" || c.instrument === "logic-analyzer")) {
       if (!scopeSettings.has(scope.id)) scopeSettings.set(scope.id, scopeDefaults(scope, netlist.text));
@@ -1002,7 +1092,7 @@ const speedSelect = el("select", { ariaLabel: "Simulation speed", title: "How fa
   el("option", { value: "real", textContent: "Real time" }),
   el("option", { value: "max", textContent: "Fastest" }));
 speedSelect.onchange = () => {
-  if (live) live.setRate(liveRate(doc.schematic.components.filter((c) => c.instrument), buildNetlist(doc.schematic).text));
+  if (live) live.setRate(liveRate(doc.sheet.components.filter((c) => c.instrument), buildNetlist(doc.schematic).text));
 };
 
 /**
@@ -1068,15 +1158,15 @@ function liveVectors(run: RunData, instruments: SchComponent[]): string[] {
     const ref = run.refs.get(comp.id);
     if (ref) names.add(`i(v${ref})`.toLowerCase());
   }
-  for (const comp of indicatorParts(doc.schematic.components)) {
+  for (const comp of indicatorParts(doc.sheet.components)) {
     for (const name of indicatorVectors(comp, run.pinNets.get(comp.id), run.refs.get(comp.id))) names.add(name);
   }
   // Character LCDs are decoded from their pins.
-  for (const comp of doc.schematic.components.filter((c) => c.kind === "lcd16x2")) {
+  for (const comp of doc.sheet.components.filter((c) => c.kind === "lcd16x2")) {
     for (const net of run.pinNets.get(comp.id)?.values() ?? []) if (net !== "0") names.add(`v(${net})`.toLowerCase());
   }
   // With nothing else to watch, the voltages shown on the wires follow the circuit.
-  if (!names.size && showVoltages && doc.schematic.components.length <= LIVE_WIRES_LIMIT) {
+  if (!names.size && showVoltages && doc.sheet.components.length <= LIVE_WIRES_LIMIT) {
     for (const nets of run.pinNets.values()) for (const net of nets.values()) if (net !== "0") names.add(`v(${net})`.toLowerCase());
   }
   return [...names];
@@ -1085,11 +1175,11 @@ function liveVectors(run: RunData, instruments: SchComponent[]): string[] {
 function updateWireVoltages(run: RunData, result: SimResult): void {
   if (!canvas.probes.size && !showVoltages) return;
   // Live data holds only what's being watched, and the rest of the wires keep their operating point.
-  showProbes(result, doc.schematic, run.pinNets, run.op);
+  showProbes(result, doc.sheet, run.pinNets, run.op);
 }
 
 function updateIndicators(run: RunData, result: SimResult): void {
-  for (const comp of indicatorParts(doc.schematic.components)) {
+  for (const comp of indicatorParts(doc.sheet.components)) {
     const shown = readIndicator(comp, result, run.pinNets.get(comp.id), run.refs.get(comp.id));
     if (shown) canvas.displays.set(comp.id, shown);
     else canvas.displays.delete(comp.id);
@@ -1115,7 +1205,7 @@ function feedLcds(run: RunData, time: Float64Array, vector: (name: string) => Fl
 function startLive(run: RunData, netlist: string, instruments: SchComponent[], scopes: SchComponent[]): void {
   stopLive();
   lcds.clear();
-  for (const comp of doc.schematic.components) if (comp.kind === "lcd16x2") lcds.set(comp.id, new CharacterLcd());
+  for (const comp of doc.sheet.components) if (comp.kind === "lcd16x2") lcds.set(comp.id, new CharacterLcd());
   const varies = changesOverTime(netlist);
   const watching = instruments.filter((c) => c.instrument !== "bode-plotter" && c.instrument !== "function-generator" && c.instrument !== "clock" && c.instrument !== "word-generator");
   const keep = liveVectors(run, watching);
@@ -1438,7 +1528,7 @@ function circuitChoices() {
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const sources = listSources(netlist.text);
   // Resistors first, then anything else whose value a sweep can reach by its name.
-  const valued = doc.schematic.components.filter((c) => c.refDes && (c.valueKey ?? "value") in c.params);
+  const valued = doc.sheet.components.filter((c) => c.refDes && (c.valueKey ?? "value") in c.params);
   const isResistor = (c: SchComponent) => (c.family ?? c.kind) === "resistor";
   const sweepable = [...valued.filter(isResistor), ...valued.filter((c) => !isResistor(c))].map((c) => c.refDes);
   // A signal source is a more useful starting point than a supply, which often has no gain.
@@ -1446,7 +1536,7 @@ function circuitChoices() {
   const signal = sources.find((name) => /\b(ac|sin|pulse|pwl)\b/i.test(line(name)));
   const sine = /\bsin\s*\(\s*\S+\s+\S+\s+([^\s)]+)/i.exec(netlist.text);
   // What a scope's second channel watches is the likeliest output, as the last net can be anything.
-  const scope = doc.schematic.components.find((c) => c.instrument === "oscilloscope");
+  const scope = doc.sheet.components.find((c) => c.instrument === "oscilloscope");
   const watched = scope && netlist.pinNets.get(scope.id)?.get("B");
   const output = watched && watched !== "0" ? watched : nets[nets.length - 1] ?? "";
   return { nets, sources, sweepable, signal, frequency: sine?.[1], output };
@@ -1898,7 +1988,8 @@ function titleBlockDialog(): void {
 }
 
 let printFrame: HTMLIFrameElement | undefined;
-function printPage(page: PrintPage): void {
+function printPage(pages: PrintPage[]): void {
+  const page = pages[0];
   printFrame?.remove();
   const frame = el("iframe", { title: "Schematic print page" });
   printFrame = frame;
@@ -1913,7 +2004,7 @@ function printPage(page: PrintPage): void {
       win.print();
     } catch (error) { writeLog(`Could not print: ${friendly(error)}`, "error"); }
   };
-  frame.srcdoc = `<!doctype html><html><head><title>Microsim</title><style>@page{size:${page.width}mm ${page.height}mm;margin:0}html,body{margin:0;padding:0;background:white}body>svg{display:block;width:${page.width}mm;height:${page.height}mm}</style></head><body>${page.svg}</body></html>`;
+  frame.srcdoc = `<!doctype html><html><head><title>Microsim</title><style>@page{size:${page.width}mm ${page.height}mm;margin:0}html,body{margin:0;padding:0;background:white}body>svg{display:block;width:${page.width}mm;height:${page.height}mm;break-after:page}body>svg:last-child{break-after:auto}</style></head><body>${pages.map((p) => p.svg).join("")}</body></html>`;
   document.body.append(frame);
 }
 
@@ -1937,14 +2028,14 @@ function printDialog(pdf = false): void {
     const preview = el("div");
     preview.style.cssText = "height:35vh;overflow:auto;background:#ddd;text-align:center";
     const message = el("p", { className: "muted" });
-    let page: PrintPage | undefined;
+    let pages: PrintPage[] = [];
     const submit = el("button", { className: "primary", textContent: pdf ? "Export PDF" : "Print", onclick: async () => {
-      if (!page) return;
-      if (!pdf) { printPage(page); close(); return; }
+      if (!pages.length) return;
+      if (!pdf) { printPage(pages); close(); return; }
       submit.disabled = true;
       submit.textContent = "Exporting...";
       try {
-        const bytes = await printPageToPdf(page);
+        const bytes = await printPagesToPdf(pages);
         const used = await saveFile(`${stem()}.pdf`, "pdf", bytes);
         if (used) { statusText.textContent = isTauri() ? `Exported ${used}.` : `Download started: ${used}.`; close(); }
       } catch (error) { writeLog(`Could not export PDF: ${friendly(error)}`, "error"); }
@@ -1953,13 +2044,13 @@ function printDialog(pdf = false): void {
     const update = () => {
       try {
         const options: PrintOptions = { paper: paper.value as PaperSize, orientation: orientation.value === "Portrait" ? "portrait" : "landscape", scale: scale.value === "Fit" ? "fit" : parseFloat(scale.value) / 100, margins: margin.value === "" ? NaN : Number(margin.value) };
-        page = renderPrintPage(doc.schematic, options);
-        preview.innerHTML = page.svg;
+        pages = renderPrintPages(doc.schematic, options);
+        preview.innerHTML = pages.map((p) => p.svg).join("");
         const svg = preview.querySelector("svg")!;
         svg.style.cssText = "height:100%;width:auto;max-width:100%";
-        message.textContent = page.clipped ? "The schematic exceeds the drawing area and will be clipped. Choose Fit to include it all." : "One sheet. Fixed scale uses 96 schematic units per inch at 100%.";
+        message.textContent = pages.some((p) => p.clipped) ? "The schematic exceeds the drawing area and will be clipped. Choose Fit to include it all." : `${pages.length} sheet(s), including block definitions. Fixed scale uses 96 schematic units per inch at 100%.`;
         submit.disabled = false;
-      } catch (error) { page = undefined; preview.replaceChildren(); message.textContent = friendly(error); submit.disabled = true; }
+      } catch (error) { pages = []; preview.replaceChildren(); message.textContent = friendly(error); submit.disabled = true; }
     };
     for (const input of [paper, orientation, scale, margin]) input.oninput = update;
     box.append(preview, message, el("div", { className: "dialog-actions" }, el("button", { textContent: "Cancel", onclick: close }), submit));
@@ -2496,6 +2587,9 @@ const MENUS: Record<string, MenuItem[]> = {
     ["C compiler (8051)...", () => design.compiler("c")],
   ],
   Edit: [
+    ["Replace by hierarchical block...", createBlockDialog],
+    ["Place hierarchical block...", placeBlockDialog],
+    ["Add block port...", addPortDialog],
     ["Undo", () => undoDocument(), `${mod}+Z`],
     ["Redo", () => undoDocument(true), `${mod}+Shift+Z`],
     ["Copy", () => canvas.copySelected(), `${mod}+C`],
@@ -2666,7 +2760,7 @@ function undoDocument(redo = false): void {
   }
   keepScopeScales();
   for (const id of closedByDelete) {
-    const part = doc.schematic.components.find((c) => c.id === id);
+    const part = doc.sheet.components.find((c) => c.id === id);
     if (!part) continue;
     closedByDelete.delete(id);
     openInstrument(part);
@@ -2708,7 +2802,7 @@ window.addEventListener("keyup", (e) => {
 });
 
 window.addEventListener("keyup", (e) => {
-  const keypad = doc.schematic.components.find((c) => c.kind === "keypad4x4" && c.params.pressed === e.key.toUpperCase());
+  const keypad = doc.sheet.components.find((c) => c.kind === "keypad4x4" && c.params.pressed === e.key.toUpperCase());
   if (keypad) pressKeypad(keypad, "none");
 });
 
@@ -2724,7 +2818,7 @@ window.addEventListener("keydown", (e) => {
   const command = e.metaKey || e.ctrlKey;
   // A selected keypad takes its own legends from the keyboard, held for as long as the key is.
   const keypad = !command && !e.altKey && canvas.selection.size === 1 && !(e.target as HTMLElement).matches?.("input, textarea, select")
-    ? doc.schematic.components.find((c) => c.kind === "keypad4x4" && canvas.selection.has(c.id)) : undefined;
+    ? doc.sheet.components.find((c) => c.kind === "keypad4x4" && canvas.selection.has(c.id)) : undefined;
   if (keypad && KEYPAD_KEYS.includes(e.key.toUpperCase())) {
     e.preventDefault();
     if (!e.repeat) pressKeypad(keypad, e.key.toUpperCase());
@@ -2771,7 +2865,7 @@ window.addEventListener("keydown", (e) => {
   const onControl = target.matches?.("button, a") ?? false;
   if (!command && !(onControl && (key === " " || key === "enter")) && (live || !"rmltf".includes(key))) {
     const pressed = e.key === " " ? "space" : key;
-    const controls = doc.schematic.components.filter((c) => c.interactive?.key?.toLowerCase() === pressed);
+    const controls = doc.sheet.components.filter((c) => c.interactive?.key?.toLowerCase() === pressed);
     if (controls.length) {
       e.preventDefault();
       // Holding a key shouldn't toggle a switch over and over, though it can keep turning a knob.

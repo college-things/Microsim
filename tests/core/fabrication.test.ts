@@ -10,7 +10,7 @@ it('requires a plated via to connect copper on different layers',()=>{
 it('exports the same rotated pad and via positions in copper, mask and NC drills',()=>{
  const b=board();b.vias!.push({x:25,y:10,net:'signal',diameter:0.8,drill:0.4});
  const files=boardFabricationFiles(b);
- expect(Object.keys(files)).toHaveLength(7);
+ expect(Object.keys(files)).toHaveLength(9);
  expect(files['front-copper.gtl']).toContain('X25000000Y30000000D03*');
  expect(files['back-copper.gbl']).toContain('X25000000Y30000000D03*');
  expect(files['front-mask.gts']).toContain('C,0.900000');

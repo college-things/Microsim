@@ -1,3 +1,4 @@
+import { flattenCircuit, hasHierarchy } from "../core/hierarchy";
 // Original schema-67 writer. The extension retains editor-only data; the ordinary
 // sheet contains flattened geometry, ports, nodes and expanded SPICE templates.
 import type { CircuitFile } from "../core/file";
@@ -103,7 +104,10 @@ export function encodeContainer(data: Uint8Array): Uint8Array {
 }
 
 export function ms14Xml(file: CircuitFile): string {
-  const s = structuredClone(file.schematic);
+  const s = structuredClone(flattenCircuit(file.schematic, true));
+  // Port and instance terminals are already resolved into the leaf pins' named nets.
+  // Their editable drawings remain in the complete editor extension below.
+  s.components = s.components.filter((c) => !c.kind.startsWith("hierarchy-"));
   // Native schematic views open at the positive origin. Preserve editor coordinates
   // in the extension while moving the exported sheet into its visible work area.
   const positions=[...s.components.flatMap(c=>c.pins.map(p=>pinWorld(c,p))),...s.wires.flatMap(w=>w.points),...s.labels,...s.texts];
@@ -233,7 +237,8 @@ export function serializeNativeMs14(file: CircuitFile): Uint8Array {
     const { params: _, displayValue: _display, ...rest } = c, { params: __, displayValue: _oldDisplay, ...before } = original;
     if (JSON.stringify(rest) !== JSON.stringify(before)) unsupported();
     // A converted NI microcontroller's program lives in the editor extension; NI loads its own from the workspace.
-    const nativeParams = (p: Record<string, string>) => Object.fromEntries(Object.entries(p).filter(([key]) => !(c.params.mcu === "8051" && (key === "code" || key === "asm"))));
+    const firmwareParam = (key: string) => ((c.params.mcu === "8051" || c.params.mcu === "pic16") && (key === "code" || key === "asm" || (c.params.mcu === "pic16" && key === "config")));
+    const nativeParams = (p: Record<string, string>) => Object.fromEntries(Object.entries(p).filter(([key]) => !firmwareParam(key)));
     if (JSON.stringify(nativeParams(c.params)) === JSON.stringify(nativeParams(original.params))) continue;
     const binding = original.nativeMs14;
     if (!binding) return unsupported();
@@ -247,7 +252,7 @@ export function serializeNativeMs14(file: CircuitFile): Uint8Array {
     const parameters = path(kids(child(part, "Attributes"))[2]?.children[0], "parameters");
     const doubles = path(kids(child(part, "Attributes"))[2]?.children[0], "doubles");
     for (const key of new Set([...Object.keys(c.params), ...Object.keys(original.params)])) {
-      if (c.params[key] === original.params[key] || (c.params.mcu === "8051" && (key === "code" || key === "asm"))) continue;
+      if (c.params[key] === original.params[key] || firmwareParam(key)) continue;
       if (!/^p\d+$/.test(key) || c.params[key] === undefined) return unsupported();
       const entry = parameters?.children[Number(key.slice(1))];
       if (!entry) return unsupported();
@@ -269,7 +274,7 @@ export function serializeNativeMs14(file: CircuitFile): Uint8Array {
   return encodeContainer(Uint8Array.from(text, (c) => c.charCodeAt(0)));
 }
 export function serializeMs14(file: CircuitFile, options: { flattenNative?: boolean } = {}): Uint8Array {
-  if (file.schematic.nativeMs14 && !options.flattenNative) return serializeNativeMs14(file);
+  if (file.schematic.nativeMs14 && !options.flattenNative && !hasHierarchy(file.schematic)) return serializeNativeMs14(file);
   // Escape all non-ASCII in the extension as XML numeric entities.
   return encodeContainer(new TextEncoder().encode(ms14Xml(file).replace(/[^\x00-\x7f]/g, (c) => `&#${c.charCodeAt(0)};`)));
 }

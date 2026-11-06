@@ -5,6 +5,8 @@
 import { Circuit } from "./circuit";
 import { VoltageSource } from "./devices";
 import { parseNumber } from "./expr";
+import { McuPic16 } from './pic-digital';
+import { picWords, picPortWidths, type PicVariant } from './pic16';
 import { Mcu8051 } from './mcu-digital';
 import { UartTx } from './uart-tx';
 import { Comparator, Hysteresis, IdealSwitch, PhaseController, SquareWave, SwitchingLoss, TriggeredPwl } from "./codemodels";
@@ -251,6 +253,24 @@ export function buildXspice(h: XHost, ports: XPort[], m: XModel): boolean {
   }
 
   switch (type) {
+    case 'd_mcupic16': {
+      const variant=m.str('variant','pic16f84a').toLowerCase() as PicVariant;
+      if(!['pic16f84a','pic16f877a'].includes(variant))throw new Error('PIC16: unknown device variant.');
+      const count=picPortWidths(variant).reduce((a,b)=>a+b,0);
+      if(ports.length!==2||flatten(ports[0]).length!==count||flatten(ports[1]).length!==1)throw new Error('PIC16: incorrect port or MCLR pin count.');
+      const program=m.str('program',''),frequency=m.num('frequency',4e6);
+      if(!program.length)return true;
+      if(program.length>131072||program.length%4||! /^[\da-f]+$/i.test(program))throw new Error('PIC16: program must contain little-endian hexadecimal words.');
+      if(!Number.isFinite(frequency)||frequency<4||frequency>20e6)throw new Error('PIC16: oscillator must be 4 Hz to 20 MHz.');
+      const code=picWords(Uint8Array.from(program.match(/../g)!,b=>parseInt(b,16)),variant);
+      const pins=flatten(ports[0]).map(h.ref),reset=h.ref(flatten(ports[1])[0]);
+      c.deferred.push(()=>{
+        const d=domain(c),clock=d.internalNet(),echo=d.addDriver(clock,2);
+        const mcu=new McuPic16(clock,echo,d.inputNet(c,reset),pins.map(n=>d.inputNet(c,n)),pins.map(n=>d.outputDriver(c,n)),4/frequency,code,variant,d,m.num('config',-1)<0?undefined:m.num('config',-1));
+        const name=h.name.toLowerCase();mcu.onHalt=()=>{c.haltRequested=name;};d.addModel(mcu);c.mcus.set(name,mcu);
+      });
+      return true;
+    }
     case 'd_mcu8051': {
       if(ports.length!==2||flatten(ports[0]).length!==32||flatten(ports[1]).length!==1)throw new Error('8051: expected 32 port pins and a reset pin.');
       const program=m.str('program',''),frequency=m.num('frequency',12e6);

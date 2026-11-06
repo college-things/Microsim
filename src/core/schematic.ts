@@ -109,6 +109,8 @@ export interface IndicatorSpec {
 }
 
 export interface SchComponent {
+  /** Shared hierarchical definition, rather than a SPICE library subcircuit. */
+  blockId?: string;
   nativeMs14?: { sheet: string; component: string; symbol: string };
   id: string;
   refDes: string;
@@ -178,6 +180,9 @@ export interface TitleBlock {
 }
 
 export interface Schematic {
+  /** Page 1 stays in the top-level arrays for compatibility with older circuits. */
+  pages?: Schematic[];
+  blocks?: BlockDefinition[];
   titleBlock?: TitleBlock;
   nativeMs14?: { xml: string; baseline: string };
   workspace?: import("./engineering").DesignWorkspace;
@@ -188,6 +193,14 @@ export interface Schematic {
   texts: FreeText[];
   /** Shared netlist text: .model, .subckt and similar definitions. */
   definitions: string;
+}
+
+export interface BlockDefinition extends Schematic {
+  id: string;
+}
+
+export function circuitPages(s: Schematic): Schematic[] {
+  return [s, ...(s.pages ?? [])];
 }
 
 export interface ImportIssue {

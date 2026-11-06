@@ -500,5 +500,17 @@ PARTS.push({
   graphics:[rect(-70,-130,140,260),text(-25,-140,'8051'),...Array.from({length:32},(_,i)=>[line(i<16?-90:70,(i%16)*15-112.5,i<16?-70:90,(i%16)*15-112.5),text(i<16?-65:38,(i%16)*15-109,`P${i>>>3}.${i&7}`,8)]).flat(),line(0,130,0,145),text(-10,125,'RST',8)],
   valueParam:'frequency',
 });
+// Original pin-block symbols, with port pins in the model's A-E order.
+for(const [kind,widths] of [['pic16f84a',[5,8]],['pic16f877a',[6,8,8,8,3]]] as const){
+  const names=widths.flatMap((width,p)=>Array.from({length:width},(_,b)=>`R${String.fromCharCode(65+p)}${b}`));
+  const half=Math.ceil(names.length/2),height=half*15+30;
+  const location=(i:number)=>({x:i<half?-90:90,y:(i%half)*15-height/2+22.5});
+  PARTS.push({kind,name:kind.toUpperCase()+' firmware core',category:'Digital',prefix:'U',
+    pins:[...names.map((name,i)=>({name,...location(i),optional:true})),{name:'MCLR',x:0,y:height/2+15}],
+    params:[{key:'frequency',label:'Oscillator (Hz, 4 clocks/cycle)',default:'4Meg'},{key:'config',label:'Configuration word (-1 to ignore)',default:'-1'},{key:'code',label:'Program words (little-endian hex bytes)',default:'0028',text:true}],
+    spice:`a{ref} [${names.map(n=>`{pin:${n}}`).join(' ')}] {pin:MCLR} MCU_{ref}\n.model MCU_{ref} d_mcupic16(program="{param:code}" frequency={param:frequency} variant="${kind}" config={param:config})`,
+    graphics:[rect(-70,-height/2,140,height),text(-35,-height/2-10,kind.toUpperCase()),...names.flatMap((n,i)=>{const {x,y}=location(i);return [line(x,y,x<0?-70:70,y),text(x<0?-65:40,y+3,n,8)];}),line(0,height/2,0,height/2+15),text(-15,height/2-5,'MCLR',8)],valueParam:'frequency',
+  });
+}
 PARTS.push(...studentParts(PARTS));
 export const PART_BY_KIND = new Map(PARTS.map((p) => [p.kind, p]));

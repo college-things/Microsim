@@ -1,3 +1,5 @@
+import { circuitPages } from "../core/schematic";
+import { flattenCircuit } from "../core/hierarchy";
 // Circuit tools the assistant can call. They use the same document API as the canvas.
 import { newId, type Doc } from "../core/doc";
 import { PART_BY_KIND, PARTS } from "../core/library";
@@ -16,6 +18,7 @@ const object = (properties: Record<string, unknown>, required: string[] = Object
 });
 
 export const TOOL_SPECS: ToolSpec[] = [
+  { name: "open_page", description: "Choose the page to edit, using its 1-based number from get_circuit. Editing tools operate on this page only.", input_schema: object({ page: { type: "integer", minimum: 1 } }) },
   {
     name: "list_parts",
     description: "List the parts that can be placed, with pin names and parameters.",
@@ -233,10 +236,14 @@ export async function runTool(doc: Doc, name: string, input: Record<string, any>
   if (name !== "list_parts") doc.settle();
   const need = (ref: string) => {
     const comp = doc.findByRef(ref);
+    if (!comp && circuitPages(doc.schematic).some((p) => p.components.some((c) => c.refDes.toUpperCase() === ref.toUpperCase()))) throw new Error(`${ref} is on another page. Use open_page first.`);
     if (!comp) throw new Error(`No component named ${ref}.`);
     return comp;
   };
   switch (name) {
+    case "open_page":
+      doc.openPage(Number(input.page) - 1);
+      return { ok: true, page: doc.activePage + 1 };
     case "list_parts":
       return PARTS.map((p) => ({
         kind: p.kind, name: p.name, category: p.category,
@@ -247,7 +254,11 @@ export async function runTool(doc: Doc, name: string, input: Record<string, any>
       const netlist = buildNetlist(doc.schematic);
       return {
         name: doc.schematic.name,
-        components: doc.schematic.components.map((c) => ({
+        active_page: doc.activePage + 1,
+        active_block: doc.blockPath,
+        pages: circuitPages(doc.schematic).map((p, i) => ({ page: i + 1, name: p.name, refs: p.components.map((c) => c.refDes) })),
+        blocks: doc.schematic.blocks,
+        components: flattenCircuit(doc.schematic).components.map((c) => ({
           ref: c.refDes, kind: c.kind, x: c.x, y: c.y, params: c.params,
           nets: Object.fromEntries(netlist.pinNets.get(c.id) ?? []),
         })),
@@ -284,11 +295,11 @@ export async function runTool(doc: Doc, name: string, input: Record<string, any>
       const done = doc.tidyLayout();
       if (!done) throw new Error("A tidy layout couldn't keep every connection and net name, so the circuit was left as it was.");
       doc.notify();
-      const loose = looseNames(doc.schematic);
+      const loose = looseNames(doc.sheet);
       return {
         ok: true,
-        parts: doc.schematic.components.length,
-        wires: doc.schematic.wires.length,
+        parts: doc.sheet.components.length,
+        wires: doc.sheet.wires.length,
         ...(loose.length ? { note: `Not on any pin, so left below the circuit: ${loose.join(", ")}.` } : {}),
       };
     }
@@ -338,7 +349,7 @@ export async function runTool(doc: Doc, name: string, input: Record<string, any>
       const pin = comp.pins.find((p) => p.name === input.pin);
       if (!pin) throw new Error(`${comp.refDes} has no pin "${input.pin}". Pins: ${comp.pins.map((p) => p.name).join(", ")}.`);
       const at = pinWorld(comp, pin);
-      doc.schematic.labels.push({ id: newId("l"), x: at.x, y: at.y, net: input.net });
+      doc.sheet.labels.push({ id: newId("l"), x: at.x, y: at.y, net: input.net });
       doc.notify();
       return { ok: true };
     }

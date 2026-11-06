@@ -2,6 +2,9 @@
 // ports, and pause, continue and single-step. The commands travel to the simulation worker through `send`.
 import type { SchComponent } from "../core/schematic";
 import type { McuState } from "../core/sim";
+import { assemblePic } from "../engine/asmpic";
+import type { PicVariant } from "../engine/pic16";
+import { isMcuPic } from "../importer/mcu";
 import { assemble51 } from "../engine/asm51";
 import { floatingWindow } from "./instruments";
 
@@ -50,7 +53,7 @@ export function createDebugger(host: HTMLElement, comp: SchComponent, send: (com
   let source: { lines: string[]; listing: { address: number; line: number }[] } | undefined;
   if (comp.params.asm?.trim()) {
     try {
-      const result = assemble51(comp.params.asm);
+      const result = isMcuPic(comp)?assemblePic(comp.params.asm,(comp.params.variant??comp.kind) as PicVariant):assemble51(comp.params.asm);
       source = { lines: comp.params.asm.split(/\r?\n/), listing: result.listing };
     } catch (error) {
       listing.textContent = `The saved source doesn't assemble: ${error instanceof Error ? error.message : String(error)}`;
@@ -120,6 +123,11 @@ export function createDebugger(host: HTMLElement, comp: SchComponent, send: (com
         state.registers.map((r, i) => `R${i} ${hex(r, 2)}`).join("  "),
         `${state.ports.map((p, i) => `P${i} ${hex(p, 2)}`).join("  ")}   cycles ${state.cycles}   t = ${(state.time * 1e3).toPrecision(5)} ms`,
       ].join("\n");
+      if(state.kind==='pic16')registers.textContent=[
+        `PC ${hex(state.pc,4)}  W ${hex(state.w!,2)}  STATUS ${hex(state.status!,2)}  FSR ${hex(state.fsr!,2)}  PCLATH ${hex(state.pclath!,2)}  bank ${state.bank}  SP ${state.sp}`,
+        state.ports.map((v,p)=>`PORT${String.fromCharCode(65+p)} ${hex(v,2)} TRIS ${hex(state.tris![p],2)}`).join('  '),
+        `cycles ${state.cycles}   t = ${(state.time*1e3).toPrecision(5)} ms`,
+      ].join('\n');
       current?.classList.remove("current");
       current = halted ? lineOf.get(state.pc) : undefined;
       if (current) {
