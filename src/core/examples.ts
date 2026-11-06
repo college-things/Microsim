@@ -203,6 +203,34 @@ EXAMPLES.push({
   },
 });
 
+EXAMPLES.push({
+  name: "Frequency counter and spectrum",
+  build(doc) {
+    // A 25% duty square wave has strong odd and even harmonics for the spectrum analyzer to show.
+    const gen = doc.addPart("function-generator", -220, -40, { shape: "square", freq: "2k", amp: "2.5", offset: "2.5", duty: "25" });
+    const gnd = doc.addPart("ground", -210, 80);
+    const load = doc.addPart("resistor", -80, 20, { value: "10k" });
+    load.rotation = 90;
+    const counter = doc.addPart("frequency-counter", 20, -140);
+    const analyzer = doc.addPart("spectrum-analyzer", 120, -140, { fmax: "40k" });
+    doc.connectPins(gen, "n", gnd, "g");
+    doc.connectPins(gen, "p", load, "1");
+    doc.connectPins(load, "2", gnd, "g");
+    doc.connectPins(gen, "p", counter, "IN");
+    doc.connectPins(gen, "p", analyzer, "IN");
+    doc.schematic.texts.push({ id: "measure-explanation", x: -100, y: 140, text: "Run it: the counter reads 2 kHz at 25% duty, and the analyzer shows the harmonics. Every fourth one is missing." });
+  },
+}, {
+  name: "Word generator count",
+  build(doc) {
+    // The word generator counts in binary on D0 to D3; the logic analyzer shows the count.
+    const words = doc.addPart("word-generator", -120, 0, { words: "0 1 2 3 4 5 6 7 8 9 A B C D E F", rate: "8k" });
+    const logic = doc.addPart("logic-analyzer", 120, 0);
+    for (const [bit, channel] of [["D0", "1"], ["D1", "2"], ["D2", "3"], ["D3", "4"]]) doc.connectPins(words, bit, logic, channel);
+    doc.schematic.texts.push({ id: "words-explanation", x: -100, y: 110, text: "D0 to D3 count from 0 to F in binary, one word every 125 us, then repeat." });
+  },
+});
+
 /** Echoes each received character, upper-casing letters. Shown in Design > Microcontroller program. */
 const ECHO_SOURCE = `; 9600 baud 8N1 at 11.0592 MHz: timer 1 in mode 2 reloads from 0FDH.
         ORG 0

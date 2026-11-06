@@ -1,4 +1,5 @@
 // Turns a schematic into SPICE text by resolving wire geometry into named nets.
+import { parseWords, wordGeneratorSources } from "./measure";
 import { PART_BY_KIND } from "./library";
 import type { Graphic, Point, SchComponent, Schematic } from "./schematic";
 
@@ -215,6 +216,15 @@ function instrumentSpice(comp: SchComponent): string {
     const width = Math.max(edge, (parseValue(p.duty) / 100) * period - edge);
     return `V{ref} {pin:p} {pin:n} PULSE(${offset - amp} ${offset + amp} 0 ${edge} ${edge} ${width} ${period}) AC 1`;
   }
+  if (comp.instrument === "word-generator") {
+    try {
+      const rate = readValue(p.rate ?? "1k") ?? 0, high = readValue(p.high ?? "5") ?? 5;
+      if (!(rate > 0)) return "";
+      return wordGeneratorSources(parseWords(p.words ?? ""), rate, high, p.mode !== "once").join("\n");
+    } catch {
+      return ""; // checkedParams reports the problem
+    }
+  }
   if (comp.instrument === "serial-terminal") {
     // Its transmit pin is a serial line that text typed into the terminal goes out on.
     const tx = comp.pins.find((pin) => /^TXD?$/i.test(pin.name));
@@ -240,6 +250,9 @@ function checkedParams(comp: SchComponent, errors: string[]): Record<string, str
   // A library part's unreadable value gets its own message below.
   if (frequency && (!part || readValue(comp.params.freq) !== undefined)) errors.push(`${comp.refDes || part?.name}: ${frequency}`);
   if (!part) return comp.params;
+  if (comp.kind === "word-generator") {
+    try { parseWords(comp.params.words ?? ""); } catch (error) { errors.push(`${comp.refDes || part.name}: ${(error as Error).message}`); }
+  }
   const out: Record<string, string> = { ...comp.params };
   for (const def of part.params) {
     if (def.options || def.text) continue;
@@ -252,6 +265,7 @@ function checkedParams(comp: SchComponent, errors: string[]): Record<string, str
     if (def.key === "value" && POSITIVE.has(comp.kind) && value <= 0) {
       errors.push(`${comp.refDes || part.name}: ${def.label.toLowerCase()} must be greater than zero.`);
     }
+    if (comp.kind === "word-generator" && def.key === "rate" && value <= 0) errors.push(`${comp.refDes}: ${def.label} must be greater than zero.`);
     if (["holding-tank", "conveyor"].includes(comp.kind) && (["capacity", "length"].includes(def.key) ? value <= 0 : value < 0)) errors.push(`${comp.refDes}: ${def.label} must be ${["capacity", "length"].includes(def.key) ? "positive" : "nonnegative"}.`);
     out[def.key] = String(value);
   }
@@ -426,7 +440,8 @@ export function buildNetlist(doc: Schematic): NetlistResult {
     const template = componentTemplate({ ...comp, params });
     const nets = pinNets.get(comp.id) ?? new Map<string, string>();
     for (const net of nets.values()) if (net === "0") hasGround = true;
-    if (!comp.pins.length && deckUsesGround(template)) hasGround = true;
+    // A part whose own lines tie to node 0, like a word generator's sources, grounds the circuit too.
+    if (deckUsesGround(template)) hasGround = true;
     if (!template.trim()) continue;
     for (const pin of comp.pins) {
       if (!nets.has(pin.name) && !(pin.optional ?? part?.pins.find((p) => p.name === pin.name)?.optional)) warnings.push(`${comp.refDes || part?.name}: pin ${pin.name} is not connected.`);
