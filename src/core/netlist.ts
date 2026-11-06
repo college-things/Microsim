@@ -1,6 +1,7 @@
 // Turns a schematic into SPICE text by resolving wire geometry into named nets.
 import { parseWords, wordGeneratorSources } from "./measure";
 import { PART_BY_KIND } from "./library";
+import { flattenCircuit, hasHierarchy } from "./hierarchy";
 import type { Graphic, Point, SchComponent, Schematic } from "./schematic";
 
 /** Keypad legends, row by row: the key at row r, column c is KEYPAD_KEYS[4r + c]. */
@@ -311,6 +312,16 @@ function spiceRefs(doc: Schematic, warnings: string[]): Map<string, string> {
 }
 
 export function buildNetlist(doc: Schematic): NetlistResult {
+  if (!hasHierarchy(doc)) return buildFlatNetlist(doc);
+  try { return buildFlatNetlist(flattenCircuit(doc)); }
+  catch (error) {
+    const result = buildFlatNetlist({ ...doc, components: [], wires: [], labels: [] });
+    result.errors.push(error instanceof Error ? error.message : String(error));
+    return result;
+  }
+}
+
+export function buildFlatNetlist(doc: Schematic): NetlistResult {
   const union = new Union();
   const warnings: string[] = [];
   const errors: string[] = [];

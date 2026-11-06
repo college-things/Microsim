@@ -1,7 +1,14 @@
 // Editable document with undo. The canvas and the assistant both change circuits through this.
 import { PART_BY_KIND } from "./library";
 import { buildNetlist, connectivitySignature, looseNames, onSegment, pinWorld, pointKey } from "./netlist";
-import { emptySchematic, type FreeText, type NetLabel, type Point, type SchComponent, type Schematic, type Wire } from "./schematic";
+import { circuitPages, emptySchematic, type BlockDefinition, type FreeText, type NetLabel, type Point, type SchComponent, type Schematic, type Wire } from "./schematic";
+
+import { blockSymbol } from "./hierarchy";
+
+// Editing checks concern only the visible sheet; block symbols are ordinary terminals here.
+function localNetlist(s: Schematic) {
+  return buildNetlist({ ...s, pages: undefined, blocks: undefined, components: s.components.map((c) => c.blockId ? { ...c, blockId: undefined } : c) });
+}
 
 export { emptySchematic };
 
@@ -16,6 +23,13 @@ export interface Clipboard {
 
 export class Doc {
   schematic: Schematic = emptySchematic();
+  activePage = 0;
+  blockPath: string[] = [];
+
+  get sheet(): Schematic {
+    const block = this.blockPath.length ? this.schematic.blocks?.find((b) => b.id === this.blockPath[this.blockPath.length - 1]) : undefined;
+    return block ?? circuitPages(this.schematic)[this.activePage] ?? this.schematic;
+  }
   dirty = false;
   private undoStack: string[] = [];
   private redoStack: string[] = [];
@@ -30,6 +44,8 @@ export class Doc {
   }
 
   notify(): void {
+    this.activePage = Math.max(0, Math.min(this.activePage, this.schematic.pages?.length ?? 0));
+    this.blockPath = this.blockPath.filter((id) => this.schematic.blocks?.some((b) => b.id === id));
     for (const fn of this.listeners) fn();
   }
 
@@ -110,6 +126,8 @@ export class Doc {
   replace(schematic: Schematic): void {
     this.settle();
     this.schematic = schematic;
+    this.activePage = 0;
+    this.blockPath = [];
     this.undoStack.length = 0;
     this.redoStack.length = 0;
     this.dirty = false;
@@ -117,15 +135,193 @@ export class Doc {
   }
 
   nextRef(prefix: string): string {
-    const used = new Set(this.schematic.components.map((c) => c.refDes.toUpperCase()));
+    const used = new Set((this.blockPath.length ? [this.sheet] : circuitPages(this.schematic)).flatMap((s) => s.components.map((c) => c.refDes.toUpperCase())));
     let n = 1;
     while (used.has(`${prefix}${n}`.toUpperCase())) n++;
     return `${prefix}${n}`;
   }
 
+  openPage(index: number): void {
+    if (!circuitPages(this.schematic)[index]) throw new Error("That page does not exist.");
+    this.settle();
+    this.activePage = index;
+    this.blockPath = [];
+    this.notify();
+  }
+
+  openBlock(id: string): void {
+    if (!this.schematic.blocks?.some((b) => b.id === id)) throw new Error("That block does not exist.");
+    this.settle();
+    this.blockPath.push(id);
+    this.notify();
+  }
+
+  addPage(name: string): void {
+    if (!name.trim()) throw new Error("Give the page a name.");
+    this.checkpoint();
+    (this.schematic.pages ??= []).push(emptySchematic(name.trim()));
+    this.openPage(this.schematic.pages.length);
+  }
+
+  renamePage(index: number, name: string): void {
+    if (!name.trim()) throw new Error("Give the page a name.");
+    const page = circuitPages(this.schematic)[index];
+    if (!page) throw new Error("That page does not exist.");
+    this.checkpoint();
+    page.name = name.trim();
+    this.notify();
+  }
+
+  deletePage(index: number): void {
+    const pages = circuitPages(this.schematic);
+    if (pages.length === 1) throw new Error("Keep at least one page in the circuit.");
+    if (!pages[index]) throw new Error("That page does not exist.");
+    this.checkpoint();
+    pages.splice(index, 1);
+    this.storePages(pages);
+    this.openPage(Math.min(index, pages.length - 1));
+  }
+
+  movePage(index: number, to: number): void {
+    const pages = circuitPages(this.schematic);
+    if (!pages[index] || !pages[to]) throw new Error("That page does not exist.");
+    if (index === to) return;
+    this.checkpoint();
+    pages.splice(to, 0, pages.splice(index, 1)[0]);
+    this.storePages(pages);
+    this.openPage(to);
+  }
+
+  private storePages(pages: Schematic[]): void {
+    const definitions = [...new Set(pages.map((p) => p.definitions).concat(this.schematic.definitions))].filter(Boolean).join("\n");
+    const copies = pages.map((p) => ({ name: p.name, components: p.components, wires: p.wires, labels: p.labels, texts: p.texts, definitions: "" }));
+    Object.assign(this.schematic, copies[0], { definitions, pages: copies.slice(1) });
+  }
+
+  placeBlock(id: string, x: number, y: number): SchComponent {
+    const block = this.schematic.blocks?.find((b) => b.id === id);
+    if (!block) throw new Error("That block does not exist.");
+    const comp = blockSymbol(block, newId("c"), this.nextRef("X"), x, y);
+    // Check cycles before changing the document, including indirect self-instances.
+    const trial = structuredClone(this.schematic);
+    const target = this.blockPath.length ? trial.blocks!.find((b) => b.id === this.blockPath[this.blockPath.length - 1])! : circuitPages(trial)[this.activePage];
+    target.components.push(comp);
+    // Unused definitions need checking too, so walk references from the current definition.
+    const walk = (blockId: string, stack: string[]) => {
+      if (stack.includes(blockId)) throw new Error("A block cannot contain itself, even through another block.");
+      for (const c of trial.blocks?.find((b) => b.id === blockId)?.components ?? []) if (c.blockId) walk(c.blockId, [...stack, blockId]);
+    };
+    if (this.blockPath.length) walk(this.blockPath[this.blockPath.length - 1], []);
+    this.checkpoint();
+    this.sheet.components.push(comp);
+    this.notify();
+    return comp;
+  }
+
+  addBlockPort(name: string, x: number, y: number): SchComponent {
+    if (!this.blockPath.length) throw new Error("Open a block to add a port.");
+    name = name.trim();
+    if (!name || this.sheet.components.some((c) => c.kind === "hierarchy-port" && c.params.name === name)) throw new Error("Give every port a different, nonempty name.");
+    this.checkpoint();
+    const port: SchComponent = { id: newId("port"), refDes: this.nextRef("P"), kind: "hierarchy-port", x, y, rotation: 0, mirrored: false, params: { name }, displayValue: name, spice: "", pins: [{ name: "port", x: 0, y: 0 }], graphics: [{ kind: "ellipse", cx: 0, cy: 0, rx: 4, ry: 4, filled: false }] };
+    this.sheet.components.push(port);
+    this.syncBlockPins();
+    this.notify();
+    return port;
+  }
+
+  renameBlockPort(id: string, name: string): void {
+    const port = this.sheet.components.find((c) => c.id === id && c.kind === "hierarchy-port");
+    if (!port || !this.blockPath.length) throw new Error("Open a block to rename its port.");
+    name = name.trim();
+    if (!name || this.sheet.components.some((c) => c !== port && c.kind === "hierarchy-port" && c.params.name === name)) throw new Error("Give every port a different, nonempty name.");
+    this.checkpoint();
+    const old = port.params.name;
+    port.params.name = name; port.displayValue = name;
+    const blockId = this.blockPath[this.blockPath.length - 1];
+    for (const sheet of [...circuitPages(this.schematic), ...(this.schematic.blocks ?? [])]) for (const c of sheet.components) {
+      if (c.blockId === blockId) for (const pin of c.pins) if (pin.name === old) pin.name = name;
+    }
+    this.syncBlockPins();
+    this.notify();
+  }
+
+  private syncBlockPins(): void {
+    const block = this.schematic.blocks?.find((b) => b.id === this.blockPath[this.blockPath.length - 1]);
+    if (!block) return;
+    for (const sheet of [...circuitPages(this.schematic), ...(this.schematic.blocks ?? [])]) for (const c of sheet.components) {
+      if (c.blockId !== block.id) continue;
+      const symbol = blockSymbol(block, c.id, c.refDes, c.x, c.y);
+      // Existing pins retain their location and named-net binding so port edits never
+      // detach the wires on other instances. New ports extend below the old pins.
+      const old = new Map(c.pins.map((p) => [p.name, p]));
+      let bottom = Math.max(-30, ...c.pins.map((p) => p.y));
+      c.pins = symbol.pins.map((p) => old.get(p.name) ?? { ...p, y: (bottom += 20) });
+      const ys = c.pins.map((p) => p.y);
+      const top = Math.min(-20, ...ys) - 10, end = Math.max(20, ...ys) + 10;
+      c.graphics = [{ kind: "rect", x: -40, y: top, w: 80, h: end - top, filled: false }, ...c.pins.flatMap((p) => [
+        { kind: "line" as const, points: [{ x: p.x, y: p.y }, { x: -40, y: p.y }] },
+        { kind: "text" as const, x: 0, y: p.y, text: p.name, size: 9 },
+      ])];
+    }
+  }
+
+  /** Boundary nets include selected wires touching outside pins, named/off-page nets,
+   * and connections crossing unselected wires. Ports retain the original connectivity. */
+  createBlock(selection: Set<string>, name: string, pinNames: Record<string, string> = {}): SchComponent {
+    const s = this.sheet;
+    const parts = s.components.filter((c) => selection.has(c.id));
+    const wires = s.wires.filter((w) => selection.has(w.id));
+    if (!parts.length) throw new Error("Select the parts and wires to put in the block.");
+    if (!name.trim()) throw new Error("Give the block a name.");
+    if (parts.some((c) => c.instrument || c.indicator || c.kind === "lcd16x2" || c.kind === "hierarchy-port")) throw new Error("Keep instruments, result displays and existing ports outside the new block.");
+    if (parts.some((c) => c.lockedName)) throw new Error("Parts referenced by stored SPICE names cannot be moved into a block. Keep those parts on the page.");
+    if (parts.some((c) => c.spice.trim() && !c.pins.length)) throw new Error("A raw SPICE deck cannot be moved into an editable block. Keep it on the page.");
+    const markers: SchComponent[] = s.wires.map((w) => ({ id: `wire:${w.id}`, refDes: "", kind: "imported", x: w.points[0].x, y: w.points[0].y, rotation: 0, mirrored: false, params: {}, spice: "", pins: [{ name: "wire", x: 0, y: 0 }] }));
+    const netlist = localNetlist({ ...s, pages: undefined, blocks: undefined, components: [...s.components.map((c) => ({ ...c, blockId: undefined })), ...markers] });
+    const inside = new Map<string, Point>();
+    const outside = new Map<string, Point[]>();
+    const add = (net: string | undefined, at: Point, selected: boolean) => {
+      if (!net) return;
+      if (selected) inside.set(net, at);
+      else outside.set(net, [...(outside.get(net) ?? []), at]);
+    };
+    for (const c of s.components) for (const p of c.pins) add(netlist.pinNets.get(c.id)?.get(p.name), pinWorld(c, p), selection.has(c.id));
+    for (const w of s.wires) add(netlist.pinNets.get(`wire:${w.id}`)?.get("wire"), w.points[0], selection.has(w.id));
+    for (const l of s.labels) add(netlist.namedNets.get(l.net), l, false);
+    // Named pins may connect to another page or to global ground without a local outside part.
+    for (const c of parts) for (const p of c.pins) if (p.net) add(netlist.pinNets.get(c.id)?.get(p.name), pinWorld(c, p), false);
+    const boundary = [...inside].filter(([net]) => outside.has(net));
+    const defaults = (net: string) => [...netlist.namedNets].find(([, n]) => n === net)?.[0] ?? net;
+    const names = boundary.map(([net]) => (pinNames[net] ?? defaults(net)).trim());
+    if (names.some((n) => !n) || new Set(names).size !== names.length) throw new Error("Give every port a different, nonempty name.");
+    const block: BlockDefinition = { ...emptySchematic(name.trim()), id: newId("block"), components: structuredClone(parts), wires: structuredClone(wires) };
+    // Preserve connections carried by labels or by geometry that stays on the parent sheet.
+    for (const c of block.components) for (const p of c.pins) p.net = netlist.pinNets.get(c.id)?.get(p.name) ?? p.net;
+    boundary.forEach(([net, at], i) => block.components.push({ id: newId("port"), refDes: `P${i + 1}`, kind: "hierarchy-port", x: at.x, y: at.y, rotation: 0, mirrored: false, params: { name: names[i] }, displayValue: names[i], pins: [{ name: "port", x: 0, y: 0, net }], spice: "", graphics: [{ kind: "ellipse", cx: 0, cy: 0, rx: 4, ry: 4, filled: false }] }));
+    // Put the new symbol beyond existing geometry so its pins cannot accidentally
+    // touch an unrelated wire. The named boundary links retain all parent connections.
+    const xs = [...s.components.flatMap((c) => c.pins.map((p) => pinWorld(c, p).x)), ...s.wires.flatMap((w) => w.points.map((p) => p.x)), ...s.labels.map((l) => l.x)];
+    const x = Math.ceil(xs.reduce((a, b) => Math.max(a, b), 0) / 10) * 10 + 150;
+    const y = Math.round(parts.reduce((n, c) => n + c.y, 0) / parts.length / 10) * 10;
+    const instance = blockSymbol(block, newId("c"), this.nextRef("X"), x, y);
+    this.checkpoint();
+    (this.schematic.blocks ??= []).push(block);
+    s.components = s.components.filter((c) => !selection.has(c.id));
+    s.wires = s.wires.filter((w) => !selection.has(w.id));
+    s.components.push(instance);
+    boundary.forEach(([net], i) => {
+      const link = `${block.id}_${i}`;
+      for (const at of [...(outside.get(net) ?? []), pinWorld(instance, instance.pins[i])]) s.labels.push({ id: newId("l"), x: at.x, y: at.y, net: link });
+    });
+    this.notify();
+    return instance;
+  }
+
   addPart(kind: string, x: number, y: number, params?: Record<string, string>): SchComponent {
     const part = PART_BY_KIND.get(kind);
     if (!part) throw new Error(`Unknown part "${kind}".`);
+    if (this.blockPath.length && (part.instrument || part.indicator || kind === "lcd16x2")) throw new Error("Place instruments and result displays on a circuit page, outside blocks.");
     const defaults = Object.fromEntries(part.params.map((p) => [p.key, p.default]));
     const comp: SchComponent = {
       id: newId("c"),
@@ -144,33 +340,35 @@ export class Doc {
     if (kind === "push-button" || kind === "spdt") {
       comp.interactive = { kind: "switch", positions: 2, position: Number(comp.params.level) >= 0.5 ? 1 : 0, momentary: kind === "push-button", apply: { low: 0, high: 1 } };
     }
-    this.schematic.components.push(comp);
-    if (kind.startsWith("user:") && part.definitions && !this.schematic.definitions.includes(part.definitions)) this.schematic.definitions += `\n${part.definitions}`;
+    this.sheet.components.push(comp);
+    if (kind.startsWith("user:") && part.definitions && !this.sheet.definitions.includes(part.definitions)) this.sheet.definitions += `\n${part.definitions}`;
     return comp;
   }
 
   addWire(points: Point[]): Wire {
     const wire: Wire = { id: newId("w"), points: simplify(points) };
     // A single point draws nothing and can't be selected, so it could never be removed.
-    if (wire.points.length > 1) this.schematic.wires.push(wire);
+    if (wire.points.length > 1) this.sheet.wires.push(wire);
     return wire;
   }
 
   removeComponent(id: string): void {
-    this.schematic.components = this.schematic.components.filter((c) => c.id !== id);
+    this.sheet.components = this.sheet.components.filter((c) => c.id !== id);
+    this.syncBlockPins();
   }
 
   removeWire(id: string): void {
-    this.schematic.wires = this.schematic.wires.filter((w) => w.id !== id);
+    this.sheet.wires = this.sheet.wires.filter((w) => w.id !== id);
   }
 
   removeAnnotation(id: string): void {
-    this.schematic.labels = this.schematic.labels.filter((l) => l.id !== id);
-    this.schematic.texts = this.schematic.texts.filter((t) => t.id !== id);
+    this.sheet.labels = this.sheet.labels.filter((l) => l.id !== id);
+    this.sheet.texts = this.sheet.texts.filter((t) => t.id !== id);
   }
 
   /** Adds copies offset from the originals, and returns their new ids. */
   paste(clip: Clipboard, dx: number, dy: number): string[] {
+    if (this.blockPath.length && clip.components.some((c) => c.instrument || c.indicator || c.kind === "lcd16x2" || c.kind === "hierarchy-port" || c.blockId)) throw new Error("Inside blocks, paste ordinary parts and wires. Use Place hierarchical block for a nested instance, and Add block port for ports.");
     const ids: string[] = [];
     for (const source of clip.components) {
       const comp: SchComponent = structuredClone(source);
@@ -180,17 +378,17 @@ export class Doc {
       comp.y += dy;
       // Named nets from a file would silently join the copy to the original.
       for (const pin of comp.pins) if (pin.net && pin.net !== "0") delete pin.net;
-      this.schematic.components.push(comp);
+      this.sheet.components.push(comp);
       ids.push(comp.id);
     }
     for (const source of clip.wires) {
       const wire: Wire = { id: newId("w"), points: source.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
-      this.schematic.wires.push(wire);
+      this.sheet.wires.push(wire);
       ids.push(wire.id);
     }
     for (const source of clip.texts ?? []) {
       const note: FreeText = { ...source, id: newId("t"), x: source.x + dx, y: source.y + dy };
-      this.schematic.texts.push(note);
+      this.sheet.texts.push(note);
       ids.push(note.id);
     }
     return ids;
@@ -203,8 +401,8 @@ export class Doc {
   pasteClear(clip: Clipboard, offset: number): string[] | undefined {
     const far = 1e7;
     const ids = new Set(this.paste(clip, far, far));
-    const alone = connectivitySignature(this.schematic, true);
-    const s = this.schematic;
+    const alone = connectivitySignature(this.sheet, true);
+    const s = this.sheet;
     const shift = (dx: number, dy: number) => {
       for (const c of s.components) if (ids.has(c.id)) { c.x += dx; c.y += dy; }
       for (const n of s.texts) if (ids.has(n.id)) { n.x += dx; n.y += dy; }
@@ -223,7 +421,7 @@ export class Doc {
 
   findByRef(refDes: string): SchComponent | undefined {
     const wanted = refDes.toUpperCase();
-    return this.schematic.components.find((c) => c.refDes.toUpperCase() === wanted);
+    return this.sheet.components.find((c) => c.refDes.toUpperCase() === wanted);
   }
 
   /** Draws an orthogonal wire between two pins. Returns undefined, changing nothing, if they're already connected. */
@@ -249,15 +447,15 @@ export class Doc {
    */
   private linkSpots(from: Point, to: Point, net: string): void {
     for (const { x, y } of [from, to]) {
-      if (this.schematic.labels.some((l) => l.net === net && l.x === x && l.y === y && !l.hidden)) continue;
-      this.schematic.labels.push({ id: newId("l"), x, y, net });
+      if (this.sheet.labels.some((l) => l.net === net && l.x === x && l.y === y && !l.hidden)) continue;
+      this.sheet.labels.push({ id: newId("l"), x, y, net });
     }
   }
 
   /** What labels joining two spots should say: what their nets already go by, ground first, or else a new name. */
   private linkName(a: Point, b: Point): { name: string; joined: boolean } {
-    const s = this.schematic;
-    const { namedNets } = buildNetlist({ ...s, labels: [...s.labels, probeAt(a), probeAt(b, OTHER_PROBE)] });
+    const s = this.sheet;
+    const { namedNets } = localNetlist({ ...s, labels: [...s.labels, probeAt(a), probeAt(b, OTHER_PROBE)] });
     const nets = [namedNets.get(PROBE), namedNets.get(OTHER_PROBE)];
     namedNets.delete(PROBE);
     namedNets.delete(OTHER_PROBE);
@@ -266,7 +464,9 @@ export class Doc {
     for (const wanted of nets) {
       for (const [name, net] of namedNets) if (net === wanted) return { name, joined };
     }
-    const taken = new Set([...namedNets.keys()].map((name) => name.toUpperCase()));
+    const sheets = this.blockPath.length ? [this.sheet] : circuitPages(this.schematic);
+    const otherNames = sheets.flatMap((s) => [...s.labels.map((l) => l.net), ...s.components.flatMap((c) => c.pins.flatMap((p) => p.net ? [p.net] : []))]);
+    const taken = new Set([...namedNets.keys(), ...otherNames].map((name) => name.toUpperCase()));
     let n = 1;
     while (taken.has(`LINK${n}`)) n++;
     return { name: `LINK${n}`, joined };
@@ -279,7 +479,7 @@ export class Doc {
   wireProblem(points: Point[]): string | undefined {
     const path = simplify(points);
     if (path.length < 2) return undefined;
-    const s = this.schematic;
+    const s = this.sheet;
     const labels = [...s.labels, probeAt(path[0]), probeAt(path[path.length - 1])];
     const meant = netMembers({ ...s, labels });
     const drawn = netMembers({ ...s, labels, wires: [...s.wires, { id: "", points: path }] });
@@ -295,7 +495,7 @@ export class Doc {
 
   /** Whether something ending on this spot would join nets that are apart now, as where two wires cross. */
   crossingAt(at: Point): boolean {
-    const s = this.schematic;
+    const s = this.sheet;
     const before = netMembers(s);
     const after = netMembers({ ...s, labels: [...s.labels, probeAt(at)] });
     const here = after.get(`=${PROBE}`)!.net;
@@ -338,18 +538,19 @@ export class Doc {
    * changes nothing at all. Kept parts stay the same objects, as panels hold on to them.
    */
   private attempt(edit: () => boolean): boolean {
-    const kept = this.schematic;
-    this.schematic = JSON.parse(JSON.stringify(kept)) as Schematic;
+    const document = this.schematic;
+    const kept = this.sheet;
+    this.schematic = structuredClone(document);
     let done = false;
     try {
       done = edit();
       if (done) {
         const parts = new Map(kept.components.map((c) => [c.id, c]));
-        this.schematic.components = this.schematic.components.map((c) => Object.assign(parts.get(c.id) ?? c, c));
-        Object.assign(kept, this.schematic);
+        this.sheet.components = this.sheet.components.map((c) => Object.assign(parts.get(c.id) ?? c, c));
+        Object.assign(kept, this.sheet);
       }
     } finally {
-      this.schematic = kept;
+      this.schematic = document;
     }
     return done;
   }
@@ -361,32 +562,32 @@ export class Doc {
     const at = pinWorld(comp, pin);
     const here = (p: Point | undefined) => p?.x === at.x && p?.y === at.y;
     const ending = (w: Wire) => here(w.points[0]) || here(w.points[w.points.length - 1]);
-    const passing = this.schematic.wires.find((w) => !ending(w) && w.points.some((q, i) => i > 0 && onSeg(at, w.points[i - 1], q)));
+    const passing = this.sheet.wires.find((w) => !ending(w) && w.points.some((q, i) => i > 0 && onSeg(at, w.points[i - 1], q)));
     if (passing) throw new Error(`A wire runs straight through ${comp.refDes} pin ${pinName}. Move the part off that wire first.`);
-    const before = buildNetlist(this.schematic).pinNets;
+    const before = localNetlist(this.sheet).pinNets;
     const net = before.get(comp.id)?.get(pinName);
     if (!net) return;
     const separated = this.attempt(() => {
       // Everything else on this net has to stay together once this pin has left it.
       const peers: { comp: SchComponent; pin: string }[] = [];
-      for (const other of this.schematic.components) {
+      for (const other of this.sheet.components) {
         for (const [name, value] of before.get(other.id) ?? []) {
           if (value === net && !(other.id === comp.id && name === pinName)) peers.push({ comp: other, pin: name });
         }
       }
-      this.schematic.wires = this.schematic.wires.filter((w) => !ending(w));
-      this.schematic.labels = this.schematic.labels.filter((l) => !here(l));
-      const leaving = this.schematic.components.find((c) => c.id === comp.id)!.pins.find((p) => p.name === pinName)!;
+      this.sheet.wires = this.sheet.wires.filter((w) => !ending(w));
+      this.sheet.labels = this.sheet.labels.filter((l) => !here(l));
+      const leaving = this.sheet.components.find((c) => c.id === comp.id)!.pins.find((p) => p.name === pinName)!;
       if (leaving.net && leaving.net !== "0") delete leaving.net;
       for (let i = 1; i < peers.length; i++) {
-        const nets = buildNetlist(this.schematic).pinNets;
+        const nets = localNetlist(this.sheet).pinNets;
         const first = nets.get(peers[0].comp.id)?.get(peers[0].pin);
         if (first === undefined || first !== nets.get(peers[i].comp.id)?.get(peers[i].pin)) {
           this.connectPins(peers[0].comp, peers[0].pin, peers[i].comp, peers[i].pin);
         }
       }
       // Some pins can't leave a net, such as a ground part's own pin or one touching another pin.
-      const after = buildNetlist(this.schematic).pinNets;
+      const after = localNetlist(this.sheet).pinNets;
       const remaining = after.get(comp.id)?.get(pinName);
       return remaining === undefined || !peers.some((peer) => after.get(peer.comp.id)?.get(peer.pin) === remaining);
     });
@@ -400,7 +601,7 @@ export class Doc {
   transformParts(comps: SchComponent[], apply: (c: SchComponent) => void): boolean {
     const ids = new Set(comps.map((c) => c.id));
     return this.attempt(() => {
-      const parts = this.schematic.components.filter((c) => ids.has(c.id));
+      const parts = this.sheet.components.filter((c) => ids.has(c.id));
       const move = new PartMove(this, parts);
       parts.forEach(apply);
       move.follow(true);
@@ -414,9 +615,9 @@ export class Doc {
    */
   tidyLayout(): boolean {
     return this.attempt(() => {
-      const schematic = this.schematic;
+      const schematic = this.sheet;
       const before = connectivitySignature(schematic);
-      const was = buildNetlist(schematic);
+      const was = localNetlist(schematic);
       const nets = was.pinNets;
       const parts = schematic.components.filter((c) => c.kind !== "ground");
       const onNet = new Map<string, SchComponent[]>();
@@ -505,7 +706,7 @@ export class Doc {
           else this.linkSpots(points[0], points[i], spelled.get(net) ?? net);
         }
       }
-      const now = buildNetlist(schematic).pinNets;
+      const now = localNetlist(schematic).pinNets;
       const namesKept = [...nets].every(([id, pins]) => [...pins].every(([pin, net]) => was.autoNets.has(net) || now.get(id)?.get(pin) === net));
       // A name that was on no pin must still be on none, as the connection check doesn't read names.
       const stillLoose = new Set(looseNames(schematic));
@@ -515,7 +716,7 @@ export class Doc {
 
   /** Removes a part and the wires that end on its pins, as those wires go nowhere afterward. */
   removeComponentAndWires(id: string): void {
-    const comp = this.schematic.components.find((c) => c.id === id);
+    const comp = this.sheet.components.find((c) => c.id === id);
     if (!comp) return;
     const ends = new Set(comp.pins.map((pin) => {
       const at = pinWorld(comp, pin);
@@ -523,8 +724,8 @@ export class Doc {
     }));
     const onPin = (p: Point | undefined) => p !== undefined && ends.has(`${p.x},${p.y}`);
     // A wire also joining two other things still carries a connection after the part is gone.
-    const others = this.schematic.components.filter((c) => c !== comp).flatMap((c) => c.pins.map((p) => pinWorld(c, p)));
-    const wires = this.schematic.wires;
+    const others = this.sheet.components.filter((c) => c !== comp).flatMap((c) => c.pins.map((p) => pinWorld(c, p)));
+    const wires = this.sheet.wires;
     const carriesOthers = (wire: Wire) => {
       const segment = (p: Point) => wire.points.some((q, i) => i > 0 && onSeg(p, wire.points[i - 1], q));
       let attached = others.filter(segment).length;
@@ -538,9 +739,9 @@ export class Doc {
       }
       return attached >= 2;
     };
-    this.schematic.wires = wires.filter((w) => (!onPin(w.points[0]) && !onPin(w.points[w.points.length - 1])) || carriesOthers(w));
+    this.sheet.wires = wires.filter((w) => (!onPin(w.points[0]) && !onPin(w.points[w.points.length - 1])) || carriesOthers(w));
     // A label left on an empty spot would silently connect whatever is placed there next.
-    this.schematic.labels = this.schematic.labels.filter((l) => !onPin(l));
+    this.sheet.labels = this.sheet.labels.filter((l) => !onPin(l));
     this.removeComponent(id);
   }
 
@@ -550,11 +751,11 @@ export class Doc {
    */
   clearRoute(from: Point, to: Point): Point[] | undefined {
     // A label joins anything touching it, so wires must avoid labels just as they avoid pins.
-    const pins: Point[] = this.schematic.labels.map((l) => ({ x: l.x, y: l.y }));
-    for (const comp of this.schematic.components) {
+    const pins: Point[] = this.sheet.labels.map((l) => ({ x: l.x, y: l.y }));
+    for (const comp of this.sheet.components) {
       for (const pin of comp.pins) pins.push(pinWorld(comp, pin));
     }
-    const wires = this.schematic.wires.map((w) => w.points);
+    const wires = this.sheet.wires.map((w) => w.points);
     const offsets = [0];
     for (let d = 20; d <= 400; d += 20) offsets.push(d, -d);
     const candidates: Point[][] = [route(from, to), [from, { x: from.x, y: to.y }, to]];
@@ -564,7 +765,7 @@ export class Doc {
       candidates.push([from, { x: midX + d, y: from.y }, { x: midX + d, y: to.y }, to]);
       candidates.push([from, { x: from.x, y: midY + d }, { x: to.x, y: midY + d }, to]);
     }
-    const bodies = this.schematic.components.map(bodyBox);
+    const bodies = this.sheet.components.map(bodyBox);
     const best = (paths: Point[][]) => {
       const clear = paths.map(simplify).filter((path) => isClear(path, from, to, pins, wires));
       // Running through a symbol is legal but hard to read, so use that only as a last resort.
@@ -581,7 +782,7 @@ const probeAt = (at: Point, net = PROBE): NetLabel => ({ id: "", x: at.x, y: at.
 
 /** What's on each net: pins as "part id/pin" and given names as "=name", with how to say each one. */
 function netMembers(schematic: Schematic): Map<string, { net: string; words: string }> {
-  const { pinNets, namedNets } = buildNetlist(schematic);
+  const { pinNets, namedNets } = localNetlist(schematic);
   const members = new Map<string, { net: string; words: string }>();
   for (const comp of schematic.components) {
     for (const [pin, net] of pinNets.get(comp.id) ?? []) {
@@ -695,7 +896,7 @@ export class PartMove {
   private leads: { from: Point; wire: Wire; added: boolean }[] = [];
 
   constructor(private doc: Doc, comps: SchComponent[], selection: Set<string> = new Set()) {
-    const s = doc.schematic;
+    const s = doc.sheet;
     this.before = connectivitySignature(s, true);
     this.comps = comps.map((comp) => ({ comp, x: comp.x, y: comp.y }));
     this.pins = comps.flatMap((comp) => comp.pins.map((pin) => ({ comp, pin, from: pinWorld(comp, pin) })));
@@ -841,7 +1042,7 @@ export class PartMove {
       const at = to.get(pointKey(item.from))!;
       item.wire.points = (careful ? this.doc.clearRoute(at, item.from) : undefined) ?? route(at, item.from);
       if (!item.added) {
-        this.doc.schematic.wires.push(item.wire);
+        this.doc.sheet.wires.push(item.wire);
         item.added = true;
       }
     }
@@ -849,7 +1050,7 @@ export class PartMove {
 
   /** Whether the connections and net names match how they began. Clears away wires that have shrunk to nothing. */
   connectionsKept(): boolean {
-    const s = this.doc.schematic;
+    const s = this.doc.sheet;
     if (connectivitySignature(s, true) !== this.before) return false;
     const shrunk = new Set([...this.following.map((f) => f.wire), ...this.leads.map((l) => l.wire)].filter((w) => simplify(w.points).length < 2));
     if (shrunk.size) s.wires = s.wires.filter((w) => !shrunk.has(w));

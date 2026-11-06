@@ -1,6 +1,6 @@
 // Text exports: schematic as SVG, plot data as CSV.
 import { junctions, pinWorld, placedBounds, shownValue, symbolGraphics } from "./netlist";
-import type { Graphic, Schematic } from "./schematic";
+import { circuitPages, type Graphic, type Schematic } from "./schematic";
 import type { SimResult } from "./sim";
 
 const escape = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -21,6 +21,19 @@ function shape(g: Graphic): string {
 const textWidth = (text: string, size = 10) => text.length * size * 0.65;
 
 export function schematicToSvg(doc: Schematic): string {
+  if (doc.pages?.length || doc.blocks?.length) {
+    const sheets = [...circuitPages(doc), ...(doc.blocks ?? [])];
+    let y = 0, width = 0;
+    const pictures = sheets.map((sheet) => {
+      const svg = schematicToSvg({ ...sheet, pages: undefined, blocks: undefined });
+      const [, , w, h] = /viewBox="([^"]+)"/.exec(svg)![1].split(" ").map(Number);
+      width = Math.max(width, w);
+      const picture = `<g transform="translate(0 ${y})"><text x="10" y="20" font-size="14">${escape(sheet.name)}</text>${svg.replace(/^<svg /, '<svg y="30" ')}</g>`;
+      y += h + 60;
+      return picture;
+    });
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${y}" viewBox="0 0 ${width} ${y}">${pictures.join("")}</svg>`;
+  }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const add = (x: number, y: number) => {
     x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
