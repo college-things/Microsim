@@ -418,6 +418,19 @@ export const PARTS: PartDef[] = [
   },
 ];
 
+// Character LCD: an HD44780-style 16x2 module. The app decodes its pins from the run (src/core/lcd.ts);
+// in the circuit each input is a 10 Mohm load, like a CMOS input.
+{
+  const lcdPins = ["RS", "RW", "E", "D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"];
+  PARTS.push({
+    kind: "lcd16x2", name: "Character LCD 16x2", category: "Digital", prefix: "LCD",
+    pins: lcdPins.map((name, i) => ({ name, x: -100 + i * 20, y: 40, optional: true })),
+    params: [],
+    spice: lcdPins.map((pin) => `R{ref}_${pin} {pin:${pin}} 0 10meg`).join("\n"),
+    graphics: [rect(-110, -30, 220, 60), rect(-96, -20, 192, 34), ...lcdPins.flatMap((name, i) => [line(-100 + i * 20, 30, -100 + i * 20, 40), text(-100 + i * 20, 24, name, 5)])],
+  });
+}
+
 // Original process models. Signal voltages are engineering units, referred to GND.
 PARTS.push({
   kind: "holding-tank", name: "Holding tank", category: "Analog", prefix: "XTANK",

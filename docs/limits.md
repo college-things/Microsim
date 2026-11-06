@@ -112,7 +112,7 @@ These are planned, in this order. Until they land, the app can't do them.
 12. **Sheets and documents:**
     - Spreadsheet View, comments, shapes and description box
     - hierarchical blocks, pages and subcircuits
-13. **Microcontrollers:** NI PIC conversion and a PIC16 core, a PIC assembler, LCDs, keypad and debugger. The built-in 8051 core executes firmware, and imported NI 8051/8052 parts and their assembly source now run on it.
+13. **Microcontrollers:** NI PIC conversion and a PIC16 core, a PIC assembler, NI LCD conversion, keypad and debugger. A built-in 16x2 character LCD (HD44780 command set, 8-bit and 4-bit) is decoded from its pins during a run and drawn on the part; custom characters and reads (busy flag) are not modelled. The built-in 8051 core executes firmware, and imported NI 8051/8052 parts and their assembly source now run on it.
 14. **Assistant coverage, original examples and final docs.**
 
 Imported NI PIC microcontrollers and LCDs still open with notices and do nothing. NI 8051/8052 parts run on the built-in core once their program is loaded, and NI virtual terminals become the serial terminal, which shows what arrives and sends what you type.

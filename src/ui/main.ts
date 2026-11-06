@@ -14,6 +14,7 @@ import { clearArea, createBode, createDistortionAnalyzer, createIvAnalyzer, crea
 import { buildExample, EXAMPLES, type Example } from "../core/examples";
 import { resultToCsv, runsToCsv, schematicToSvg } from "../core/export";
 import { truthTable } from "../core/logic";
+import { CharacterLcd } from "../core/lcd";
 import { ivCurves, type IvMode } from "../core/ivcurves";
 import { billOfMaterials, bomToCsv, bomToHtml, electricalRulesCheck, kicadNetlist } from "../core/reports";
 import { indicatorParts, indicatorVectors, readIndicator } from "../core/indicators";
@@ -1018,6 +1019,10 @@ function liveVectors(run: RunData, instruments: SchComponent[]): string[] {
   for (const comp of indicatorParts(doc.schematic.components)) {
     for (const name of indicatorVectors(comp, run.pinNets.get(comp.id), run.refs.get(comp.id))) names.add(name);
   }
+  // Character LCDs are decoded from their pins.
+  for (const comp of doc.schematic.components.filter((c) => c.kind === "lcd16x2")) {
+    for (const net of run.pinNets.get(comp.id)?.values() ?? []) if (net !== "0") names.add(`v(${net})`.toLowerCase());
+  }
   // With nothing else to watch, the voltages shown on the wires follow the circuit.
   if (!names.size && showVoltages && doc.schematic.components.length <= LIVE_WIRES_LIMIT) {
     for (const nets of run.pinNets.values()) for (const net of nets.values()) if (net !== "0") names.add(`v(${net})`.toLowerCase());
@@ -1040,8 +1045,25 @@ function updateIndicators(run: RunData, result: SimResult): void {
   canvas.invalidate();
 }
 
+/** Each character LCD's controller, rebuilt for every run. */
+const lcds = new Map<string, CharacterLcd>();
+
+function feedLcds(run: RunData, time: Float64Array, vector: (name: string) => Float64Array | undefined): void {
+  for (const [id, lcd] of lcds) {
+    const nets = run.pinNets.get(id);
+    const pin = (name: string) => { const net = nets?.get(name); return !net ? undefined : net === "0" ? new Float64Array(time.length) : vector(`v(${net})`); };
+    const rs = pin("RS"), e = pin("E");
+    if (!rs || !e) continue;
+    lcd.feed({ time, rs, e, rw: pin("RW"), data: ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"].map(pin) });
+    canvas.displays.set(id, { lcd: lcd.text() });
+  }
+  canvas.invalidate();
+}
+
 function startLive(run: RunData, netlist: string, instruments: SchComponent[], scopes: SchComponent[]): void {
   stopLive();
+  lcds.clear();
+  for (const comp of doc.schematic.components) if (comp.kind === "lcd16x2") lcds.set(comp.id, new CharacterLcd());
   const varies = changesOverTime(netlist);
   const watching = instruments.filter((c) => c.instrument !== "bode-plotter" && c.instrument !== "function-generator" && c.instrument !== "clock" && c.instrument !== "word-generator");
   const keep = liveVectors(run, watching);
@@ -1084,6 +1106,7 @@ function startLive(run: RunData, netlist: string, instruments: SchComponent[], s
     },
     onChunk(time, values, reached) {
       buffer?.append(time, values);
+      if (lcds.size) feedLcds(run, time, (name) => values[names.indexOf(name.toLowerCase())]);
       // Decoders such as the serial terminal see every sample, however late the next redraw is.
       for (const view of views.values()) view.stream?.(run, time, (name) => values[names.indexOf(name.toLowerCase())]);
       simTime = reached;

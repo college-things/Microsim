@@ -252,6 +252,81 @@ EXAMPLES.push({
   },
 });
 
+EXAMPLES.push({
+  name: "8051 LCD hello",
+  build(doc) {
+    const program = assemble51(LCD_SOURCE).code;
+    const mcu = doc.addPart("mcu8051", -160, 0, { frequency: "12Meg", code: Array.from(program, (b) => b.toString(16).padStart(2, "0")).join(""), asm: LCD_SOURCE });
+    const lcd = doc.addPart("lcd16x2", 160, -160);
+    const gnd = doc.addPart("ground", 0, 200);
+    doc.connectPins(mcu, "RST", gnd, "g");
+    doc.connectPins(mcu, "P2.0", lcd, "RS");
+    doc.connectPins(mcu, "P2.1", lcd, "E");
+    doc.connectPins(lcd, "RW", gnd, "g");
+    for (const bit of [4, 5, 6, 7]) doc.connectPins(mcu, `P2.${bit}`, lcd, `D${bit}`);
+    doc.schematic.texts.push({ id: "lcd-explanation", x: -60, y: 260, text: "Run it: the 8051 sets the LCD to 4-bit mode on P2 and writes two lines." });
+  },
+});
+
+/** Drives an HD44780-style LCD in 4-bit mode: RS = P2.0, E = P2.1, D4-D7 = P2.4-P2.7. */
+const LCD_SOURCE = `RSF     BIT 20H.0          ; register select for the next transfer
+        ORG 0
+        MOV SP,#60H
+        MOV A,#30H         ; power-up: three 8-bit function sets...
+        ACALL NIBBLE
+        ACALL NIBBLE
+        ACALL NIBBLE
+        MOV A,#20H         ; ...then switch to 4-bit
+        ACALL NIBBLE
+        MOV A,#28H         ; 4-bit, two lines
+        ACALL CMD
+        MOV A,#0CH         ; display on, cursor off
+        ACALL CMD
+        MOV A,#06H         ; move right after each character
+        ACALL CMD
+        MOV A,#01H         ; clear
+        ACALL CMD
+        MOV DPTR,#LINE1
+        ACALL PRINT
+        MOV A,#0C0H        ; second line
+        ACALL CMD
+        MOV DPTR,#LINE2
+        ACALL PRINT
+HERE:   SJMP HERE
+
+CMD:    CLR RSF
+        SJMP SEND
+DAT:    SETB RSF
+SEND:   PUSH ACC
+        ACALL NIBBLE       ; high nibble first
+        POP ACC
+        SWAP A
+        ACALL NIBBLE
+        ACALL DELAY
+        RET
+NIBBLE: ANL A,#0F0H        ; data on P2.4-P2.7, RS on P2.0, E low
+        JNB RSF,NOTDATA
+        ORL A,#01H
+NOTDATA: MOV P2,A
+        SETB P2.1          ; pulse E; the LCD latches on the falling edge
+        NOP
+        CLR P2.1
+        RET
+PRINT:  CLR A
+        MOVC A,@A+DPTR
+        JZ DONE
+        ACALL DAT
+        INC DPTR
+        SJMP PRINT
+DONE:   RET
+DELAY:  MOV R7,#100        ; about 200 us at 12 MHz
+        DJNZ R7,$
+        RET
+LINE1:  DB "Hello, Microsim",0
+LINE2:  DB "8051 + LCD",0
+        END
+`;
+
 /** Echoes each received character, upper-casing letters. Shown in Design > Microcontroller program. */
 const ECHO_SOURCE = `; 9600 baud 8N1 at 11.0592 MHz: timer 1 in mode 2 reloads from 0FDH.
         ORG 0

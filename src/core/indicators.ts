@@ -10,6 +10,8 @@ export interface PartDisplay {
   glow?: number;
   /** A digit or reading drawn over the part. */
   text?: string;
+  /** Rows of a character LCD, drawn in the part's window. */
+  lcd?: string[];
 }
 
 /** Library parts that behave as indicators. */
