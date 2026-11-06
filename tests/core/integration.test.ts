@@ -172,7 +172,7 @@ describe("library parts simulate", () => {
       const comp = doc.addPart(part.kind, 200, 0);
       const load = doc.addPart("resistor", 400, 0, { value: "1k" });
       wire(load, "2", gnd, "g");
-      if(part.kind==='mcu8051' || part.pins.some(pin => Math.abs(pin.x) >= 70)){
+      if(part.kind==='mcu8051' || /^pic16f/.test(part.kind) || part.pins.some(pin => Math.abs(pin.x) >= 70)){
         // Large chip symbols span the fixture's routing area. Keep this model test
         // independent of those intersecting wire routes; wiring has separate tests.
         comp.pins.forEach((pin,i)=>{pin.net=i===0?'library_test':'0';});load.pins[0].net='library_test';

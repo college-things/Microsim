@@ -16,7 +16,7 @@ import { resultToCsv, runsToCsv, schematicToSvg } from "../core/export";
 import { truthTable } from "../core/logic";
 import { CharacterLcd } from "../core/lcd";
 import { createDebugger, type DebugCommand, type DebuggerView } from "./debugger";
-import { isMcu8051 } from "../importer/mcu";
+import { isMcu } from "../importer/mcu";
 import { ivCurves, type IvMode } from "../core/ivcurves";
 import { billOfMaterials, bomToCsv, bomToHtml, electricalRulesCheck, kicadNetlist } from "../core/reports";
 import { indicatorParts, indicatorVectors, readIndicator } from "../core/indicators";
@@ -665,7 +665,7 @@ function appendKeypad(wrap: HTMLElement, comp: SchComponent): void {
 
 function appendInteractive(wrap: HTMLElement, comp: SchComponent): void {
   if (comp.kind === "keypad4x4") { appendKeypad(wrap, comp); return; }
-  if (isMcu8051(comp)) wrap.append(el("button", { textContent: "Debug program", onclick: () => openDebugger(comp) }));
+  if (isMcu(comp)) wrap.append(el("button", { textContent: "Debug program", onclick: () => openDebugger(comp) }));
   const spec = comp.interactive;
   if (spec?.kind === "switch") {
     const hint = spec.key ? ` (key ${spec.key})` : "";
