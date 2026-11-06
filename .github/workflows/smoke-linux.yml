@@ -19,9 +19,12 @@ jobs:
         with:
           workspaces: src-tauri
       - name: Build dependencies and a virtual display
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb imagemagick xdotool fluxbox tesseract-ocr x11-utils dbus-x11
+          # The runner's regional HTTP mirror can stall on large WebKit packages.
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb imagemagick xdotool fluxbox tesseract-ocr x11-utils dbus-x11
       - run: npm ci
       - run: npx tauri build --bundles deb
       - name: Launch, open an example and run it
