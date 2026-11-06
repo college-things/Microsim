@@ -151,6 +151,9 @@ export interface LiveSession {
 }
 
 export interface McuState {
+  kind?: "8051" | "pic16";
+  /** PIC registers; the legacy A/PSW fields also carry W/STATUS for older clients. */
+  w?: number; status?: number; fsr?: number; pclath?: number; bank?: number; tris?: number[];
   pc: number;
   a: number;
   b: number;
@@ -159,7 +162,7 @@ export interface McuState {
   dptr: number;
   /** R0-R7 of the selected bank. */
   registers: number[];
-  /** Port latches P0-P3. */
+  /** Port latches: P0-P3 on 8051, A-E (or A/B) on PIC. */
   ports: number[];
   cycles: number;
   /** Simulated time, in seconds. */

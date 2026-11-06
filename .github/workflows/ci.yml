@@ -19,6 +19,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # gpasm checks the PIC assembler independently; its test skips where gputils is absent.
+      - name: Install gputils
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gputils
       - run: npm run typecheck
       # Tests that need the local Multisim installation or installed compilers skip themselves here.
       - run: npm test

@@ -2,6 +2,7 @@
 // so it can run inside a Web Worker.
 
 import { SimError, type AnalysisRequest, type LiveChunk, type LiveSession, type SimOptions, type SimResult } from "../core/sim";
+import { Pic16 } from "./pic16";
 import { Analysis, currentTime } from "./analysis";
 import { elaborate, parseDeck } from "./netlist";
 
@@ -89,6 +90,10 @@ export function createLiveSession(netlist: string, options: { tmax?: number; uic
       mcuState(device: string) {
         const cpu = circuit.mcus.get(device.toLowerCase())?.cpu;
         if (!cpu) return undefined;
+        if(cpu instanceof Pic16)return {
+          kind: "pic16" as const, pc:cpu.pc,w:cpu.w,status:cpu.status,fsr:cpu.fsr,pclath:cpu.pclath,bank:cpu.bank,
+          a:cpu.w,b:0,psw:cpu.status,sp:cpu.sp,dptr:0,registers:[],ports:cpu.widths.map((_,p)=>cpu.latch(p)),tris:cpu.widths.map((_,p)=>cpu.tris(p)),cycles:cpu.cycles,time:analysis.liveTime(run),
+        };
         const bank = cpu.psw & 0x18;
         return {
           pc: cpu.pc, a: cpu.a, b: cpu.read(0xf0), psw: cpu.psw, sp: cpu.read(0x81), dptr: (cpu.read(0x83) << 8) | cpu.read(0x82),
