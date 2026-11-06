@@ -93,7 +93,7 @@ These are planned, in this order. Until they land, the app can't do them.
    - four-channel scope
    - scope cursors, AC coupling and A/B mode
    - logic analyzer trigger and voltage-following lanes
-   - network analyzer, logic converter and distortion analyzer. The frequency counter, spectrum analyzer and word generator are done: the counter and analyzer read the stored transient (the analyzer is a Hann-windowed FFT of the last stored span, so its resolution is 1/span), and the word generator drives eight PWL outputs of up to 1024 words, once or repeating, with 1% edges.
+   - network analyzer and distortion analyzer. The logic converter reads a truth table of up to eight inputs, one operating point per row, and minimizes it to a sum of products; it does not build circuits from expressions. The frequency counter, spectrum analyzer and word generator are done: the counter and analyzer read the stored transient (the analyzer is a Hann-windowed FFT of the last stored span, so its resolution is 1/span), and the word generator drives eight PWL outputs of up to 1024 words, once or repeating, with 1% edges.
 10. **Analyses:** distortion, worst case, fuller Monte Carlo, nested and list sweeps, sensitivity, noise figure, batched and user-defined.
 11. **Reports and checks:** the Reports menu provides a bill of materials (CSV/HTML), electrical rules check, and SPICE/KiCad netlist export. Footprints appear only when explicitly supplied. Output conflicts are checked for the built-in logic gates, flip-flop, clock and serial transmitter; custom model pin directions and program-dependent MCU GPIO directions are not inferred. KiCad import still needs verification in KiCad.
 12. **Sheets and documents:**

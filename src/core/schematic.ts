@@ -38,6 +38,7 @@ export type InstrumentKind =
   | "frequency-counter"
   | "spectrum-analyzer"
   | "word-generator"
+  | "logic-converter"
   | "clock"
   | "unsupported";
 

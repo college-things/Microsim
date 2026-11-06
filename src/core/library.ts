@@ -387,6 +387,13 @@ export const PARTS: PartDef[] = [
     spice: "", instrument: "word-generator",
     graphics: [...instrumentBox("WORD GEN", 84, 40), ...Array.from({ length: 8 }, (_, i) => line(-35 + i * 10, 20, -35 + i * 10, 30))],
   },
+  {
+    kind: "logic-converter", name: "Logic converter", category: "Instruments", prefix: "XLC",
+    pins: [...Array.from({ length: 8 }, (_, i) => ({ name: "ABCDEFGH"[i], x: -40 + i * 10, y: 30, optional: true })), { name: "OUT", x: 40, y: 30, optional: true }],
+    params: [{ key: "high", label: "Logic high (V)", default: "5" }],
+    spice: "", instrument: "logic-converter",
+    graphics: [...instrumentBox("LOGIC CONV", 100, 40), ...Array.from({ length: 8 }, (_, i) => line(-40 + i * 10, 20, -40 + i * 10, 30)), line(40, 20, 40, 30), text(40, 14, "OUT", 6)],
+  },
 ];
 
 // Original process models. Signal voltages are engineering units, referred to GND.

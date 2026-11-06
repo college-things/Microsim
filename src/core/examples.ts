@@ -231,6 +231,27 @@ EXAMPLES.push({
   },
 });
 
+EXAMPLES.push({
+  name: "Logic converter majority",
+  build(doc) {
+    // Three-input majority: OUT is 1 when at least two of A, B and C are 1.
+    const ab = doc.addPart("and", -40, -80), ac = doc.addPart("and", -40, 0), bc = doc.addPart("and", -40, 80);
+    const or1 = doc.addPart("or", 80, -40), or2 = doc.addPart("or", 180, 0);
+    const load = doc.addPart("resistor", 260, 60, { value: "10k" });
+    load.rotation = 90;
+    const gnd = doc.addPart("ground", 260, 160);
+    const converter = doc.addPart("logic-converter", 0, 240);
+    doc.connectPins(ab, "y", or1, "a"); doc.connectPins(ac, "y", or1, "b");
+    doc.connectPins(or1, "y", or2, "a"); doc.connectPins(bc, "y", or2, "b");
+    doc.connectPins(or2, "y", load, "1"); doc.connectPins(load, "2", gnd, "g");
+    doc.connectPins(converter, "A", ab, "a"); doc.connectPins(converter, "A", ac, "a");
+    doc.connectPins(converter, "B", ab, "b"); doc.connectPins(converter, "B", bc, "a");
+    doc.connectPins(converter, "C", ac, "b"); doc.connectPins(converter, "C", bc, "b");
+    doc.connectPins(converter, "OUT", or2, "y");
+    doc.schematic.texts.push({ id: "majority-explanation", x: -120, y: 330, text: "Double-click the logic converter and read the truth table: OUT = AB + AC + BC." });
+  },
+});
+
 /** Echoes each received character, upper-casing letters. Shown in Design > Microcontroller program. */
 const ECHO_SOURCE = `; 9600 baud 8N1 at 11.0592 MHz: timer 1 in mode 2 reloads from 0FDH.
         ORG 0

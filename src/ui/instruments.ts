@@ -9,6 +9,7 @@ import { formatSI, Plot, type Series } from "./plot";
 import {coupleScope,scopeTrigger} from '../core/scope';
 import { decodeUart, terminalText } from "../core/uart";
 import { countFrequency, spectrum } from "../core/measure";
+import { minimize, type TruthTable } from "../core/logic";
 
 export interface RunData {
   op?: SimResult;
@@ -923,6 +924,67 @@ export function createSpectrumAnalyzer(host: HTMLElement, comp: SchComponent, on
       note.style.display = "";
       note.textContent = "The circuit changed. Run it to see the spectrum.";
       detail.textContent = "";
+    },
+  };
+}
+
+/**
+ * Logic converter. It doesn't follow a run: "Read truth table" drives the connected inputs through every
+ * combination with its own operating-point runs, through `convert`.
+ */
+export function createLogicConverter(host: HTMLElement, comp: SchComponent, onClose: () => void, convert: (progress: (done: number, total: number) => void) => Promise<TruthTable>): InstrumentView {
+  const win = floatingWindow(host, `Logic converter ${comp.refDes}`, 420, 420, onClose);
+  const intro = document.createElement("div");
+  intro.className = "muted pad";
+  intro.textContent = "Wire A to H to the circuit's inputs and OUT to its output, then read the truth table. Each row is an operating point with the inputs driven to 0 V or logic high.";
+  const read = document.createElement("button");
+  read.textContent = "Read truth table";
+  const expression = document.createElement("div");
+  expression.className = "readout logic-expression";
+  const table = document.createElement("div");
+  table.className = "logic-table";
+  win.body.append(intro, read, expression, table);
+  let busy = false;
+  read.onclick = async () => {
+    if (busy) return;
+    busy = true;
+    read.disabled = true;
+    expression.textContent = "";
+    table.replaceChildren();
+    try {
+      const result = await convert((done, total) => { read.textContent = `Reading ${done} of ${total}...`; });
+      expression.textContent = `OUT = ${minimize(result.inputs, result.outputs)}`;
+      const grid = document.createElement("table");
+      const head = grid.createTHead().insertRow();
+      for (const name of [...result.inputs, "OUT", "Volts"]) head.append(Object.assign(document.createElement("th"), { textContent: name }));
+      const body = grid.createTBody();
+      result.outputs.forEach((value, row) => {
+        const tr = body.insertRow();
+        result.inputs.forEach((_, i) => { tr.insertCell().textContent = String((row >> (result.inputs.length - 1 - i)) & 1); });
+        tr.insertCell().textContent = value === undefined ? "?" : String(value);
+        tr.insertCell().textContent = formatSI(result.volts[row], "V");
+      });
+      table.append(grid);
+      if (result.outputs.includes(undefined)) table.prepend(Object.assign(document.createElement("p"), { className: "muted", textContent: "? marks an output between the logic thresholds; the expression treats it as don't-care." }));
+    } catch (error) {
+      expression.textContent = "";
+      table.textContent = error instanceof Error ? error.message : String(error);
+    } finally {
+      busy = false;
+      read.disabled = false;
+      read.textContent = "Read truth table";
+    }
+  };
+  return {
+    element: win.root,
+    follow(part) {
+      comp = part;
+      win.setTitle(`Logic converter ${comp.refDes}`);
+    },
+    update() {},
+    clear() {
+      expression.textContent = "";
+      table.replaceChildren();
     },
   };
 }

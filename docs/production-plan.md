@@ -43,7 +43,7 @@ In order of how often Multisim users need them:
 2. [x] Printing and PDF export of the schematic with a title block. File offers editable title fields, a single-sheet preview, A4/A3/US Letter/US Tabloid, either orientation, margins and fit or fixed scale. Print uses the browser/webview OS dialog; direct PDF export embeds a 300 dpi image. Native print dialogs still need hands-on checks on each platform.
 3. [ ] Hierarchical blocks, subcircuits and multi-page designs.
 4. [ ] Analyses: parameter, temperature and nested sweeps; Monte Carlo and worst case; Fourier and distortion.
-5. [ ] Instruments: frequency counter, word generator and spectrum analyzer done; logic converter, IV analyzer, distortion analyzer and network analyzer to go.
+5. [ ] Instruments: frequency counter, word generator, spectrum analyzer and logic converter done; IV analyzer, distortion analyzer and network analyzer to go.
 6. [ ] Parts: grow the original library (74xx and CMOS logic, common op-amps, regulators, transistors, displays, relays, sensors), with original symbols.
 7. [ ] Microcontrollers: HD44780-style LCD, keypad, 8051 timer 2, a debugger (step, breakpoints, registers), PIC16 core and assembler.
 8. [ ] PCB: SMD pads, a footprint library, copper zones, silkscreen and a simple autorouter.

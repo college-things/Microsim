@@ -10,9 +10,10 @@ import { runSimulation, stopSimulation } from "../sim/client";
 import { LiveBuffer, LiveRun } from "../sim/live";
 import { holdWorkerScript } from "../sim/spawn";
 import { SchematicCanvas } from "./canvas";
-import { clearArea, createBode, createFrequencyCounter, createLogicAnalyzer, createSerialTerminal, createSpectrumAnalyzer, createMultimeter, createScope, createWattmeter, floatingWindow, type InstrumentView, type RunData, type ScopeSettings, showWindow, tileWindows } from "./instruments";
+import { clearArea, createBode, createFrequencyCounter, createLogicAnalyzer, createLogicConverter, createSerialTerminal, createSpectrumAnalyzer, createMultimeter, createScope, createWattmeter, floatingWindow, type InstrumentView, type RunData, type ScopeSettings, showWindow, tileWindows } from "./instruments";
 import { buildExample, EXAMPLES, type Example } from "../core/examples";
 import { resultToCsv, runsToCsv, schematicToSvg } from "../core/export";
+import { truthTable } from "../core/logic";
 import { billOfMaterials, bomToCsv, bomToHtml, electricalRulesCheck, kicadNetlist } from "../core/reports";
 import { indicatorParts, indicatorVectors, readIndicator } from "../core/indicators";
 import { parseDeck } from "../core/deck";
@@ -766,6 +767,20 @@ function openInstrument(comp: SchComponent): void {
     view = createWattmeter(sheetHost, comp, onClose);
   } else if (comp.instrument === "logic-analyzer") {
     view = createLogicAnalyzer(sheetHost, comp, settingsFor(), rescaled, onClose, running);
+  } else if (comp.instrument === "logic-converter") {
+    const id = comp.id;
+    view = createLogicConverter(sheetHost, comp, onClose, async (progress) => {
+      commitTypedValue();
+      const netlist = buildNetlist(doc.schematic);
+      if (netlist.errors.length) throw new Error(netlist.errors[0]);
+      const part = doc.schematic.components.find((c) => c.id === id);
+      const nets = netlist.pinNets.get(id);
+      if (!part || !nets) throw new Error("The logic converter is no longer in the circuit.");
+      const inputs = "ABCDEFGH".split("").flatMap((name) => (nets.get(name) ? [{ name, net: nets.get(name)! }] : []));
+      const out = nets.get("OUT");
+      if (!out) throw new Error("Connect OUT to the circuit's output.");
+      return truthTable(netlist.text, inputs, out, runSimulation, readValue(part.params.high ?? "5") || 5, progress);
+    });
   } else if (comp.instrument === "frequency-counter") {
     view = createFrequencyCounter(sheetHost, comp, onClose);
   } else if (comp.instrument === "spectrum-analyzer") {
