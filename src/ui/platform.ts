@@ -1,4 +1,5 @@
 // Desktop integration. The native shell uses real dialogs and menus; the browser build uses web APIs.
+import { t, getLocale } from './i18n';
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
 export const isMac = () => navigator.platform.toLowerCase().includes("mac");
 
@@ -82,6 +83,8 @@ export interface NativeMenuItem {
  */
 export async function installNativeMenu(appName: string, menus: Record<string, NativeMenuItem[]>): Promise<boolean> {
   if (!isTauri()) return false;
+  const language=getLocale();
+  const localize=(source:string)=>t(source,language);
   const { Menu, MenuItem, PredefinedMenuItem, Submenu } = await import("@tauri-apps/api/menu");
   const mac = isMac();
   // The standard Quit item is reported to skip close handling, which would lose unsaved work.
@@ -96,7 +99,7 @@ export async function installNativeMenu(appName: string, menus: Record<string, N
       await PredefinedMenuItem.new({ item: { About: null } }),
       await PredefinedMenuItem.new({ item: "Separator" }),
       await PredefinedMenuItem.new({ item: "Hide" }),
-      await MenuItem.new({ text: `Quit ${appName}`, accelerator: "CmdOrCtrl+Q", action: () => void close() }),
+      await MenuItem.new({ text: localize(`Quit ${appName}`), accelerator: "CmdOrCtrl+Q", action: () => void close() }),
     ],
   }));
   for (const [text, entries] of Object.entries(menus)) {
@@ -109,14 +112,14 @@ export async function installNativeMenu(appName: string, menus: Record<string, N
       }
     }
     for (const entry of entries) {
-      items.push(await MenuItem.new({ text: entry.label, accelerator: entry.accelerator, action: entry.action }));
+      items.push(await MenuItem.new({ text: localize(entry.label), accelerator: entry.accelerator, action: entry.action }));
     }
     // Windows and Linux end the File menu with Exit instead of a Mac app menu's Quit.
     if (text === "File" && !mac) {
       items.push(await PredefinedMenuItem.new({ item: "Separator" }));
-      items.push(await MenuItem.new({ text: "Exit", accelerator: "Ctrl+Q", action: () => void close() }));
+      items.push(await MenuItem.new({ text: localize('Exit'), accelerator: "Ctrl+Q", action: () => void close() }));
     }
-    submenus.push(await Submenu.new({ text, items }));
+    submenus.push(await Submenu.new({ text:localize(text), items }));
   }
   const menu = await Menu.new({ items: submenus });
   await menu.setAsAppMenu();

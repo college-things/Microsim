@@ -31,6 +31,12 @@ import { DesignUI } from "./design";
 import { serializeMs14 } from "../importer/writer";
 import { PAPER_SIZES, printPagesToPdf, renderPrintPages, type PaperSize, type PrintOptions, type PrintPage } from "../core/print";
 import type { TitleBlock } from "../core/schematic";
+import { appendLocalized, bindAttribute, bindProperties, onLocaleChange, setText, t } from './i18n';
+import { initializePreferences, getPreferences, savePreferences, subscribePreferences } from './preferences';
+import { applyAppearance, showSettings } from './settings';
+
+initializePreferences();
+applyAppearance(getPreferences());
 
 const FILE_EXTENSION = "microsim";
 /** What saved circuits were called before the app was renamed. They still open. */
@@ -39,8 +45,8 @@ const KEY_STORAGE = "microsim.apiKey";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: (Node | string)[]): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
-  Object.assign(node, props);
-  (node as HTMLElement).append(...children);
+  bindProperties(node, props);
+  appendLocalized((node as HTMLElement), ...children);
   return node;
 }
 
@@ -75,7 +81,7 @@ const writeKey = (value: string) => {
 const doc = new Doc();
 const app = document.getElementById("app")!;
 const shell = el("div", { className: "app" });
-app.append(shell);
+appendLocalized(app, shell);
 
 // Layout
 const menubar = el("div", { className: "menubar" }, el("span", { className: "brand" }, "Microsim"));
@@ -84,14 +90,14 @@ const main = el("div", { className: "main" });
 const statusbar = el("div", { className: "statusbar" });
 const statusText = el("span", { className: "grow" });
 const statusCount = el("span");
-statusbar.append(statusText, statusCount);
-shell.append(menubar, toolbar, main, statusbar);
+appendLocalized(statusbar, statusText, statusCount);
+appendLocalized(shell, menubar, toolbar, main, statusbar);
 
 // A phone gets the panels one above the other on a page that scrolls, and an honest word about it.
 const SMALL_NOTE_STORAGE = "microsim.smallNoteRead";
 const smallNote = el("div", { className: "small-note", role: "note" },
   el("span", { textContent: "Microsim is made for a computer. On a small screen you can open circuits, run them and read the results, but placing parts and wiring by touch is awkward." }));
-smallNote.append(el("button", { className: "quiet", textContent: "OK", onclick: () => {
+appendLocalized(smallNote, el("button", { className: "quiet", textContent: "OK", onclick: () => {
   smallNote.hidden = true;
   writeStore(SMALL_NOTE_STORAGE, "1");
 } }));
@@ -101,11 +107,11 @@ shell.insertBefore(smallNote, main);
 const palette = el("aside", { className: "palette" });
 const center = el("div", { className: "center" });
 const side = el("aside", { className: "side" });
-main.append(palette, center, side);
+appendLocalized(main, palette, center, side);
 
 const sheetHost = el("div", { className: "sheet-host" });
 const spreadsheet = el("section", { className: "spreadsheet" });
-center.append(sheetHost, spreadsheet);
+appendLocalized(center, sheetHost, spreadsheet);
 
 const canvas = new SchematicCanvas(sheetHost, doc);
 const pageBar = el("div", { className: "tabs", role: "tablist", ariaLabel: "Circuit pages and blocks" });
@@ -123,26 +129,26 @@ function renderPageTabs(): void {
   pageBar.replaceChildren();
   const button = (text: string, action: () => void) => el("button", { textContent: text, onclick: action });
   circuitPages(doc.schematic).forEach((page, i) => {
-    const tab = button(page.name, () => switchSheet(() => doc.openPage(i)));
+    const tab = el('button', {textContent:page.name,translate:false,onclick:()=>switchSheet(()=>doc.openPage(i))});
     tab.setAttribute("role", "tab");
     tab.setAttribute("aria-selected", String(!doc.blockPath.length && doc.activePage === i));
-    pageBar.append(tab);
+    appendLocalized(pageBar, tab);
   });
-  pageBar.append(button("+ Page", () => askText("Add page", "Page name", (name) => switchSheet(() => doc.addPage(name)))));
+  appendLocalized(pageBar, button("+ Page", () => askText("Add page", "Page name", (name) => switchSheet(() => doc.addPage(name)))));
   if (doc.blockPath.length) {
-    pageBar.append(button("Back to page", () => switchSheet(() => doc.openPage(doc.activePage))));
+    appendLocalized(pageBar, button("Back to page", () => switchSheet(() => doc.openPage(doc.activePage))));
     doc.blockPath.forEach((id, i) => {
       const block = doc.schematic.blocks?.find((b) => b.id === id);
-      if (block) pageBar.append(button(`› ${block.name}`, () => switchSheet(() => { doc.blockPath = doc.blockPath.slice(0, i + 1); doc.notify(); })));
+      if (block) appendLocalized(pageBar, button(`› ${block.name}`, () => switchSheet(() => { doc.blockPath = doc.blockPath.slice(0, i + 1); doc.notify(); })));
     });
   } else {
-    pageBar.append(button("Rename", () => askText("Rename page", "Page name", (name) => doc.renamePage(doc.activePage, name))));
-    pageBar.append(button("←", () => { if (doc.activePage > 0) switchSheet(() => doc.movePage(doc.activePage, doc.activePage - 1)); }));
-    pageBar.append(button("→", () => { if (doc.activePage < (doc.schematic.pages?.length ?? 0)) switchSheet(() => doc.movePage(doc.activePage, doc.activePage + 1)); }));
-    if (doc.schematic.pages?.length) pageBar.append(button("Delete page", () => {
+    appendLocalized(pageBar, button("Rename", () => askText("Rename page", "Page name", (name) => doc.renamePage(doc.activePage, name))));
+    appendLocalized(pageBar, button("←", () => { if (doc.activePage > 0) switchSheet(() => doc.movePage(doc.activePage, doc.activePage - 1)); }));
+    appendLocalized(pageBar, button("→", () => { if (doc.activePage < (doc.schematic.pages?.length ?? 0)) switchSheet(() => doc.movePage(doc.activePage, doc.activePage + 1)); }));
+    if (doc.schematic.pages?.length) appendLocalized(pageBar, button("Delete page", () => {
       const remove = () => switchSheet(() => doc.deletePage(doc.activePage));
       if (!doc.sheet.components.length && !doc.sheet.wires.length && !doc.sheet.labels.length && !doc.sheet.texts.length) { remove(); return; }
-      dialog("Delete page?", (box, close) => box.append(el("p", { textContent: `Delete “${doc.sheet.name}” and everything on it? You can undo this.` }), el("div", { className: "dialog-actions" }, button("Cancel", close), button("Delete page", () => { remove(); close(); }))));
+      dialog("Delete page?", (box, close) => appendLocalized(box, el("p", { textContent: `Delete “${doc.sheet.name}” and everything on it? You can undo this.` }), el("div", { className: "dialog-actions" }, button("Cancel", close), button("Delete page", () => { remove(); close(); }))));
     }));
   }
 }
@@ -162,10 +168,10 @@ function createBlockDialog(): void {
         const ports = definition.components.filter((c) => c.kind === "hierarchy-port");
         const fields = ports.map((p) => {
           const input = el("input", { value: p.params.name, ariaLabel: `Pin ${p.params.name}` });
-          box.append(el("label", { className: "field" }, p.params.name, input));
+          appendLocalized(box, el("label", { className: "field" }, el("span", {textContent:p.params.name,translate:false}), input));
           return input;
         });
-        box.append(el("p", { textContent: "Ports connect the block to the rest of the circuit. Double-click a placed block to edit its shared definition." }), el("button", { textContent: "Create block", onclick: () => {
+        appendLocalized(box, el("p", { textContent: "Ports connect the block to the rest of the circuit. Double-click a placed block to edit its shared definition." }), el("button", { textContent: "Create block", onclick: () => {
           try {
             const names = Object.fromEntries(ports.map((p, i) => [p.pins[0].net!, fields[i].value]));
             const instance = doc.createBlock(selection, name, names);
@@ -179,8 +185,8 @@ function createBlockDialog(): void {
 
 function placeBlockDialog(): void {
   dialog("Place hierarchical block", (box, close) => {
-    if (!doc.schematic.blocks?.length) box.append(el("p", { textContent: "Select parts and use Replace by hierarchical block to create a definition first." }));
-    for (const block of doc.schematic.blocks ?? []) box.append(el("button", { textContent: block.name, onclick: () => {
+    if (!doc.schematic.blocks?.length) appendLocalized(box, el("p", { textContent: "Select parts and use Replace by hierarchical block to create a definition first." }));
+    for (const block of doc.schematic.blocks ?? []) appendLocalized(box, el("button", { textContent: block.name, translate:false, onclick: () => {
       try { canvas.beginPlace(`block:${block.id}`); close(); }
       catch (error) { writeLog(friendly(error), "error"); }
     } }));
@@ -194,7 +200,7 @@ function addPortDialog(): void {
     catch (error) { writeLog(friendly(error), "error"); }
   });
 }
-canvas.onStatus = (text) => { statusText.textContent = text; };
+canvas.onStatus = (text) => { setText(statusText, text); };
 const limitsText = el("span");
 const limitsBanner = el("div", { className: "limits-banner", role: "alert", hidden: true }, limitsText,
   el("button", { className: "quiet", textContent: "Hide", title: "Hide this notice. It stays on the Issues tab.", onclick: () => {
@@ -209,7 +215,7 @@ let shownNotices: string[] = [];
 let hiddenNotices = "";
 function showLimitsBanner(): void {
   const notices = unsimulatedParts(doc.schematic);
-  limitsText.textContent = notices.join(" ");
+  setText(limitsText, notices.join(" "));
   limitsBanner.hidden = !notices.length || limitsText.textContent === hiddenNotices;
   issues = [...limitIssues(doc.schematic), ...issues.filter((issue) => !shownNotices.includes(issue.message) && !notices.includes(issue.message))];
   shownNotices = notices;
@@ -218,13 +224,13 @@ function showLimitsBanner(): void {
 const emptyHint = el("div", { className: "empty-hint" },
   el("strong", { textContent: "Start a circuit" }),
   "Pick a part on the left and click here to place it, then click its pins to wire it. Or open a circuit from the Examples menu.");
-sheetHost.append(emptyHint);
+appendLocalized(sheetHost, emptyHint);
 
 // Tabs helper
 function tabs(parent: HTMLElement, names: string[], onShow: (name: string, body: HTMLElement) => void) {
   const bar = el("div", { className: "tabs", role: "tablist" });
   const body = el("div", { className: "tab-body", role: "tabpanel" });
-  parent.append(bar, body);
+  appendLocalized(parent, bar, body);
   let active = names[0];
   const buttons = names.map((name) => {
     const button = el("button", { textContent: name, role: "tab" });
@@ -237,14 +243,14 @@ function tabs(parent: HTMLElement, names: string[], onShow: (name: string, body:
       show(next);
       buttons[names.indexOf(next)].focus();
     };
-    bar.append(button);
+    appendLocalized(bar, button);
     return button;
   });
   const show = (name: string) => {
     active = name;
-    buttons.forEach((b) => {
-      b.classList.toggle("active", b.textContent === name);
-      b.setAttribute("aria-selected", String(b.textContent === name));
+    buttons.forEach((b,i) => {
+      b.classList.toggle("active", names[i] === name);
+      b.setAttribute("aria-selected", String(names[i] === name));
     });
     body.replaceChildren();
     onShow(name, body);
@@ -263,35 +269,35 @@ let lastOpRows: [string, number, string][] = [];
 const sheetTabs = tabs(spreadsheet, ["Results", "Components", "Netlist", "Issues"], (name, body) => {
   if (name === "Results") {
     if (lastOpRows.length) {
-      body.append(el("p", { className: "muted pad", textContent: "DC operating point, with AC sources at their DC value. During a run, instruments and the wires being watched show live values. Other wires keep these values." }));
+      appendLocalized(body, el("p", { className: "muted pad", textContent: "DC operating point, with AC sources at their DC value. During a run, instruments and the wires being watched show live values. Other wires keep these values." }));
       const table = el("table");
-      table.innerHTML = "<thead><tr><th>Signal</th><th>DC value</th></tr></thead>";
+      appendLocalized(table, el("thead", {}, el("tr", {}, el("th", {textContent:"Signal"}), el("th", {textContent:"DC value"}))));
       const rows = el("tbody");
       for (const [signal, value, unit] of lastOpRows) {
-        rows.append(el("tr", {}, el("td", { textContent: signal }), el("td", { className: "num", textContent: formatSI(value, unit) })));
+        appendLocalized(rows, el("tr", {}, el("td", { textContent: signal }), el("td", { className: "num", textContent: formatSI(value, unit) })));
       }
-      table.append(rows);
-      body.append(table);
+      appendLocalized(table, rows);
+      appendLocalized(body, table);
     }
     const pre = el("pre");
     for (const entry of log) {
-      pre.append(el("div", { className: entry.kind ? `issue-${entry.kind}` : "", textContent: entry.text }));
+      appendLocalized(pre, el("div", { className: entry.kind ? `issue-${entry.kind}` : "", textContent: entry.text }));
     }
-    if (!log.length && !lastOpRows.length) pre.append("Run a simulation to see results here.");
-    body.append(pre);
+    if (!log.length && !lastOpRows.length) appendLocalized(pre, "Run a simulation to see results here.");
+    appendLocalized(body, pre);
   } else if (name === "Components") {
     const table = el("table");
-    table.innerHTML = "<thead><tr><th>Ref</th><th>Part</th><th>Value</th><th>Pins</th></tr></thead>";
+    appendLocalized(table, el("thead", {}, el("tr", {}, ...["Ref","Part","Value","Pins"].map(textContent=>el("th",{textContent})))));
     const rows = el("tbody");
     const nets = buildNetlist(doc.schematic).pinNets;
     for (const comp of doc.sheet.components) {
       const part = PART_BY_KIND.get(comp.kind);
       const pinText = [...(nets.get(comp.id) ?? new Map<string, string>())].map(([p, n]) => `${p}:${n}`).join("  ");
       const row = el("tr", { tabIndex: 0 },
-        el("td", { textContent: comp.refDes }),
+        el("td", { textContent: comp.refDes, translate:false }),
         el("td", { textContent: part?.name ?? comp.kind }),
-        el("td", { textContent: comp.displayValue ?? (part?.valueParam ? comp.params[part.valueParam] : "") ?? "" }),
-        el("td", { textContent: pinText }));
+        el("td", { textContent: comp.displayValue ?? (part?.valueParam ? comp.params[part.valueParam] : "") ?? "", translate:false }),
+        el("td", { textContent: pinText, translate:false }));
       // On press, because leaving an edited field rebuilds this table before a click could land.
       row.onmousedown = (e: MouseEvent) => {
         if (e.button !== 0) return;
@@ -304,24 +310,24 @@ const sheetTabs = tabs(spreadsheet, ["Results", "Components", "Netlist", "Issues
           canvas.select([comp.id]);
         }
       };
-      rows.append(row);
+      appendLocalized(rows, row);
     }
-    table.append(rows);
-    body.append(table);
+    appendLocalized(table, rows);
+    appendLocalized(body, table);
   } else if (name === "Netlist") {
-    body.append(el("pre", { textContent: buildNetlist(doc.schematic).text }));
+    appendLocalized(body, el("pre", { textContent: buildNetlist(doc.schematic).text, translate:false }));
   } else {
     const netlistWarnings = buildNetlist(doc.schematic).warnings;
     const pre = el("pre");
     for (const issue of issues) {
-      pre.append(el("div", {
+      appendLocalized(pre, el("div", {
         className: `issue-${issue.severity}`,
         textContent: `${issue.severity}${issue.refDes ? ` ${issue.refDes}` : ""}: ${issue.message}`,
       }));
     }
-    for (const warning of new Set([...netlistWarnings, ...simWarnings])) pre.append(el("div", { className: "issue-warning", textContent: `warning: ${warning}` }));
-    if (!pre.childElementCount) pre.textContent = "No issues.";
-    body.append(pre);
+    for (const warning of new Set([...netlistWarnings, ...simWarnings])) appendLocalized(pre, el("div", { className: "issue-warning", textContent: `warning: ${warning}` }));
+    if (!pre.childElementCount) setText(pre, "No issues.");
+    appendLocalized(body, pre);
   }
 });
 
@@ -343,7 +349,7 @@ function logWarnings(warnings: string[]): void {
 function markWindowsStale(): void {
   for (const [win, title] of resultWindows) {
     const name = win.querySelector(".window-title span");
-    if (name) name.textContent = `${title} (out of date)`;
+    if (name) setText(name, `${title} (out of date)`);
   }
 }
 
@@ -361,14 +367,14 @@ function markResultsStale(): void {
   canvas.probes.clear();
   log = [{ text: "The circuit changed. Run again to update the results.", kind: "warning" }];
   if (sheetTabs.current() === "Results") sheetTabs.refresh();
-  runState.textContent = "Results out of date";
+  setText(runState, "Results out of date");
 }
 
 let lastSignature = "";
 let settingEdit = false;
 doc.subscribe(() => {
   renderPageTabs();
-  statusCount.textContent = `${doc.sheet.components.length} parts, ${doc.sheet.wires.length} wires`;
+  setText(statusCount, `${doc.sheet.components.length} parts, ${doc.sheet.wires.length} wires`);
   const { components, wires, labels, texts } = doc.sheet;
   emptyHint.hidden = components.length + wires.length + labels.length + texts.length > 0;
   for (const [id, view] of views) {
@@ -424,28 +430,28 @@ function partIcon(kind: string): HTMLCanvasElement {
 }
 
 const partSearch = el("input", { type: "search", placeholder: "Find a part", ariaLabel: "Find a part", className: "part-search" });
-palette.append(partSearch);
+appendLocalized(palette, partSearch);
 const partList = el("div");
-palette.append(partList);
+appendLocalized(palette, partList);
 function renderPalette(): void {
   const query = partSearch.value.trim().toLowerCase();
   partList.replaceChildren();
   for (const category of ["Sources", "Basic", "Diodes", "Transistors", "Analog", "Digital", "Instruments"] as const) {
-    const parts = PARTS.filter((p) => p.category === category && p.name.toLowerCase().includes(query));
+    const parts = PARTS.filter((p) => p.category === category && `${p.name} ${t(p.name,'uk')} ${t(p.name,'ru')}`.toLowerCase().includes(query));
     if (!parts.length) continue;
-    partList.append(el("h4", { textContent: category }));
+    appendLocalized(partList, el("h4", { textContent: category }));
     for (const part of parts) {
-      const button = el("button", { className: "part", title: `Place ${part.name}`, draggable: true }, partIcon(part.kind), part.name);
+      const button = el("button", { className: "part", title: `${t('Place')} ${t(part.name)}`, draggable: true }, partIcon(part.kind), part.name);
       button.onclick = (e: MouseEvent) => {
         // detail is 0 when a key pressed the button, and there's no pointer to place with.
         if (e.detail === 0) canvas.placeAtCenter(part.kind);
         else canvas.beginPlace(part.kind);
       };
       button.ondragstart = (e: DragEvent) => e.dataTransfer?.setData("text/part", part.kind);
-      partList.append(button);
+      appendLocalized(partList, button);
     }
   }
-  if (!partList.childElementCount) partList.append(el("p", { className: "muted pad", textContent: "No matching parts. Add a SPICE model block to use your own model." }));
+  if (!partList.childElementCount) appendLocalized(partList, el("p", { className: "muted pad", textContent: "No matching parts. Add a SPICE model block to use your own model." }));
 }
 partSearch.oninput = renderPalette;
 renderPalette();
@@ -489,7 +495,7 @@ const sideTabs: ReturnType<typeof tabs> = tabs(side, ["Properties", "Assistant"]
     renderProperties();
   } else {
     propsBody = undefined;
-    body.append(chatPanel());
+    appendLocalized(body, chatPanel());
   }
 });
 
@@ -509,10 +515,10 @@ function renderProperties(): void {
   if (active && body.contains(active)) return;
   body.replaceChildren();
   const wrap = el("div", { className: "pad" });
-  body.append(wrap);
+  appendLocalized(body, wrap);
   const selected = doc.sheet.components.filter((c) => canvas.selection.has(c.id));
   if (selected.length !== 1) {
-    wrap.append(el("p", {
+    appendLocalized(wrap, el("p", {
       className: "muted",
       textContent: selected.length > 1 ? `${selected.length} parts selected.` : "Select a part to edit it. Click a pin to start a wire. R rotates, M mirrors, Delete removes.",
     }));
@@ -522,13 +528,13 @@ function renderProperties(): void {
   const part = PART_BY_KIND.get(comp.kind);
   const heading = el("h4", { textContent: part?.name ?? "Imported part" });
   heading.style.margin = "0 0 8px";
-  wrap.append(heading);
-  const field = (label: string, control: HTMLElement) => wrap.append(el("label", { className: "field" }, label, control));
+  appendLocalized(wrap, heading);
+  const field = (label: string, control: HTMLElement) => appendLocalized(wrap, el("label", { className: "field" }, label, control));
   const ref = el("input", { value: comp.refDes });
   ref.dataset.ref = "true";
   const problem = el("p", { className: "field-error", role: "alert", hidden: true });
   const report = (control: HTMLElement, text: string) => {
-    problem.textContent = text;
+    setText(problem, text);
     problem.hidden = !text;
     control.setAttribute("aria-invalid", text ? "true" : "false");
   };
@@ -579,14 +585,14 @@ function renderProperties(): void {
     };
     field(def.label, control);
   }
-  wrap.append(problem);
+  appendLocalized(wrap, problem);
   appendInteractive(wrap, comp);
   appendConnections(wrap, comp);
   if (comp.instrument && comp.instrument !== "unsupported" && comp.instrument !== "function-generator" && comp.instrument !== "clock") {
-    wrap.append(el("button", { className: "primary", textContent: "Open instrument", onclick: () => openInstrument(comp) }));
+    appendLocalized(wrap, el("button", { className: "primary", textContent: "Open instrument", onclick: () => openInstrument(comp) }));
   }
   if (!part && comp.spice) {
-    wrap.append(el("p", { className: "muted", textContent: "SPICE definition from the imported file:" }), el("pre", { textContent: comp.spice }));
+    appendLocalized(wrap, el("p", { className: "muted", textContent: "SPICE definition from the imported file:" }), el("pre", { textContent: comp.spice }));
   }
 }
 canvas.onSelectionChange = renderProperties;
@@ -747,14 +753,14 @@ function appendKeypad(wrap: HTMLElement, comp: SchComponent): void {
     // Held, not clicked: firmware scanning the keypad needs the key down long enough to see it.
     button.onpointerdown = (e) => { button.setPointerCapture(e.pointerId); const p = part(); if (p) pressKeypad(p, key); };
     button.onpointerup = button.onpointercancel = () => { const p = part(); if (p) pressKeypad(p, "none"); };
-    grid.append(button);
+    appendLocalized(grid, button);
   }
-  wrap.append(el("p", { className: "muted", textContent: "Hold a key to press it. With the keypad selected, keys 0-9, A-D, * and # on your keyboard work too." }), grid);
+  appendLocalized(wrap, el("p", { className: "muted", textContent: "Hold a key to press it. With the keypad selected, keys 0-9, A-D, * and # on your keyboard work too." }), grid);
 }
 
 function appendInteractive(wrap: HTMLElement, comp: SchComponent): void {
   if (comp.kind === "keypad4x4") { appendKeypad(wrap, comp); return; }
-  if (isMcu(comp)) wrap.append(el("button", { textContent: "Debug program", onclick: () => openDebugger(comp) }));
+  if (isMcu(comp)) appendLocalized(wrap, el("button", { textContent: "Debug program", onclick: () => openDebugger(comp) }));
   const spec = comp.interactive;
   if (spec?.kind === "switch") {
     const hint = spec.key ? ` (key ${spec.key})` : "";
@@ -762,12 +768,12 @@ function appendInteractive(wrap: HTMLElement, comp: SchComponent): void {
       textContent: `Switch position ${spec.position + 1} of ${spec.positions}${hint}`,
       onclick: () => toggleSwitch(comp),
     });
-    wrap.append(button);
+    appendLocalized(wrap, button);
   } else if (spec?.kind === "variable") {
     const slider = el("input", { type: "range", min: "0", max: "100", step: String(spec.increment ?? 1), value: String(spec.percent), ariaLabel: "Setting in percent" });
     slider.style.width = "100%";
     slider.onchange = () => setInteractive([comp], () => Number(slider.value));
-    wrap.append(el("label", { className: "field" }, `Setting: ${spec.percent}%${spec.key ? ` (key ${spec.key})` : ""}`, slider));
+    appendLocalized(wrap, el("label", { className: "field" }, `Setting: ${spec.percent}%${spec.key ? ` (key ${spec.key})` : ""}`, slider));
   }
 }
 
@@ -778,13 +784,13 @@ function appendConnections(wrap: HTMLElement, comp: SchComponent): void {
   const nets = buildNetlist(doc.schematic).pinNets.get(comp.id);
   const heading = el("h4", { textContent: "Connections" });
   heading.style.margin = "12px 0 6px";
-  wrap.append(heading);
+  appendLocalized(wrap, heading);
   for (const pin of comp.pins) {
     const target = el("select", { ariaLabel: `Connect pin ${pin.name} to` },
       el("option", { value: "", textContent: nets?.get(pin.name) ? `On net ${nets.get(pin.name)}. Connect to...` : "Not connected. Connect to..." }));
     for (const other of others) {
       for (const otherPin of other.pins) {
-        target.append(el("option", { value: `${other.id}|${otherPin.name}`, textContent: `${other.refDes} pin ${otherPin.name}` }));
+        appendLocalized(target, el("option", { value: `${other.id}|${otherPin.name}`, textContent: `${other.refDes} pin ${otherPin.name}` }));
       }
     }
     target.onchange = () => {
@@ -795,13 +801,13 @@ function appendConnections(wrap: HTMLElement, comp: SchComponent): void {
       const connected = doc.connectPins(comp, pin.name, other, name);
       if (connected) doc.notify();
       else doc.forgetIfUnchanged();
-      statusText.textContent = connected
+      setText(statusText, connected
         ? `Connected ${comp.refDes} pin ${pin.name} to ${other.refDes} pin ${name}.`
-        : `${comp.refDes} pin ${pin.name} and ${other.refDes} pin ${name} are already connected.`;
+        : `${comp.refDes} pin ${pin.name} and ${other.refDes} pin ${name} are already connected.`);
       target.blur();
       renderProperties();
     };
-    wrap.append(el("label", { className: "field" }, `Pin ${pin.name}`, target));
+    appendLocalized(wrap, el("label", { className: "field" }, `Pin ${pin.name}`, target));
   }
 }
 
@@ -855,7 +861,7 @@ function openInstrument(comp: SchComponent): void {
   const onClose = () => {
     views.delete(comp.id);
     closedWindows.add(comp.id);
-    statusText.textContent = `Double-click ${comp.refDes} to open its window again.`;
+    setText(statusText, `Double-click ${comp.refDes} to open its window again.`);
   };
   const settingsFor = () => {
     const settings = scopeSettings.get(comp.id) ?? scopeDefaults(comp, buildNetlist(doc.schematic).text);
@@ -965,7 +971,7 @@ function setActivity(next: Activity, text = ""): void {
   activity = next;
   runButton.disabled = next !== "idle";
   stopButton.disabled = next === "idle";
-  runState.textContent = text;
+  setText(runState, text);
 }
 
 /** Ends whatever is running, so that a late result from it can't report anything. */
@@ -1236,7 +1242,7 @@ function startLive(run: RunData, netlist: string, instruments: SchComponent[], s
       updateIndicators(run, run.tran);
       updateWireVoltages(run, run.tran);
     }
-    runState.textContent = `Running, t = ${formatSI(simTime, "s")}`;
+    setText(runState, `Running, t = ${formatSI(simTime, "s")}`);
   };
   live = new LiveRun(netlist, keep, liveRate(instruments, netlist), stopAt && stopAt > 0 ? stopAt : undefined, {
     onReady(kept, warnings) {
@@ -1253,7 +1259,7 @@ function startLive(run: RunData, netlist: string, instruments: SchComponent[], s
       if (debugView && debug?.mcu) {
         const halted = !!debug.halted && debug.halted === debugDevice(debugView.compId)?.toLowerCase();
         debugView.update(debug.mcu, halted);
-        if (debug.halted) runState.textContent = `Paused by the debugger at t = ${formatSI(reached, "s")}`;
+        if (debug.halted) setText(runState, `Paused by the debugger at t = ${formatSI(reached, "s")}`);
       }
       if (lcds.size) feedLcds(run, time, (name) => values[names.indexOf(name.toLowerCase())]);
       // Decoders such as the serial terminal see every sample, however late the next redraw is.
@@ -1338,7 +1344,7 @@ stopButton.onclick = () => {
   if (changeWasPending) markResultsStale();
 };
 
-let showVoltages = true;
+let showVoltages = getPreferences().showVoltages;
 let importedAnalyses: AnalysisRequest[] = [];
 
 // Analyses dialog and grapher
@@ -1351,9 +1357,9 @@ function dialog(title: string, build: (body: HTMLElement, close: () => void) => 
   };
   overlay.addEventListener("pointerdown", (e) => { if (e.target === overlay) close(); });
   build(box, close);
-  overlay.append(box);
+  appendLocalized(overlay, box);
   overlay.setAttribute("aria-modal", "true");
-  overlay.setAttribute("aria-label", title);
+  bindAttribute(overlay, "aria-label", title);
   // Keep the keyboard inside the dialog, and put focus back where it was afterward. The top
   // dialog hears keys wherever focus is, because a click on its text leaves focus on nothing.
   const previous = document.activeElement as HTMLElement | null;
@@ -1384,7 +1390,7 @@ function dialog(title: string, build: (body: HTMLElement, close: () => void) => 
     document.removeEventListener("keydown", onKey);
     previous?.focus?.();
   }).observe(document.body, { childList: true });
-  document.body.append(overlay);
+  appendLocalized(document.body, overlay);
   (box.querySelector<HTMLElement>("[autofocus]") ?? box.querySelector<HTMLElement>("input, select, textarea, button"))?.focus();
 }
 
@@ -1399,7 +1405,7 @@ function resultWindow(title: string, width: number, height: number, results: Sim
   const name = cutShort ? `${title} (partial)` : title;
   const win = floatingWindow(sheetHost, name, width, height, () => resultWindows.delete(win.root));
   resultWindows.set(win.root, name);
-  if (cutShort) win.body.append(el("p", { className: "field-error pad", textContent: cutShort }));
+  if (cutShort) appendLocalized(win.body, el("p", { className: "field-error pad", textContent: cutShort }));
   return win;
 }
 
@@ -1411,14 +1417,14 @@ function pageRuns(parent: HTMLElement, runs: SweepRun[], draw: (page: SweepRun[]
   const next = el("button", { textContent: "Next" });
   const render = () => {
     const start = page * size;
-    label.textContent = `Runs ${start + 1}-${Math.min(start + size, runs.length)} of ${runs.length}`;
+    setText(label, `Runs ${start + 1}-${Math.min(start + size, runs.length)} of ${runs.length}`);
     previous.disabled = page === 0;
     next.disabled = start + size >= runs.length;
     draw(runs.slice(start, start + size));
   };
   previous.onclick = () => { page--; render(); };
   next.onclick = () => { page++; render(); };
-  if (runs.length > size) parent.append(el("div", { className: "legend" }, previous, label, next));
+  if (runs.length > size) appendLocalized(parent, el("div", { className: "legend" }, previous, label, next));
   render();
 }
 
@@ -1428,9 +1434,9 @@ function grapher(title: string, runs: SweepRun[]): void {
   const win = resultWindow(title, 620, 420, runs.map((r) => r.result));
   if (!first.axis) {
     const pre = el("pre");
-    pageRuns(win.body, runs, page => { pre.textContent = page.flatMap(r => r.result.vectors.map(v => `${runs.length > 1 ? `${r.label}  ` : ""}${v.name} = ${formatSI(v.re[0], v.unit)}`)).join("\n"); });
+    pageRuns(win.body, runs, page => { setText(pre, page.flatMap(r => r.result.vectors.map(v => `${runs.length > 1 ? `${r.label}  ` : ""}${v.name} = ${formatSI(v.re[0], v.unit)}`)).join("\n")); });
     pre.style.overflow = "auto";
-    win.body.append(pre);
+    appendLocalized(win.body, pre);
     return;
   }
   const isAc = first.analysis === "ac";
@@ -1443,8 +1449,8 @@ function grapher(title: string, runs: SweepRun[]): void {
   const phase = isAc ? new Plot(win.body) : undefined;
   const key = el("div", { className: "plot-key" });
   const legend = el("div", { className: "legend" });
-  win.body.append(key, legend);
-  legend.append(el("button", {
+  appendLocalized(win.body, key, legend);
+  appendLocalized(legend, el("button", {
     className: "quiet", textContent: "Export CSV",
     onclick: () => void exportText(`${stem()}-${first.analysis}.csv`, "csv", runs.length > 1 ? runsToCsv(runs) : resultToCsv(first)),
   }));
@@ -1500,7 +1506,7 @@ function grapher(title: string, runs: SweepRun[]): void {
       if (box.checked) picked.add(name); else picked.delete(name);
       redraw();
     };
-    legend.append(el("label", {}, box, signals.has(name) ? name : `${name} (no AC signal)`));
+    appendLocalized(legend, el("label", {}, box, signals.has(name) ? name : `${name} (no AC signal)`));
   }
   pageRuns(win.body, runs, page => { visibleRuns = page; redraw(); });
 }
@@ -1624,7 +1630,7 @@ function textWindow(title: string, rows: string[], result: SimResult): void {
   const win = resultWindow(title, 460, 300, [result]);
   const pre = el("pre", { textContent: rows.join("\n") });
   pre.style.overflow = "auto";
-  win.body.append(pre);
+  appendLocalized(win.body, pre);
 }
 
 /** Reads a required number from an analysis form, naming the field when it's wrong. */
@@ -1720,22 +1726,22 @@ function batchWindow(runs: SweepRun[]): void {
   pageRuns(win.body, runs, page => {
     sections.replaceChildren();
     for (const run of page) {
-      sections.append(el("h3", { textContent: run.label }));
-      if (run.summary) sections.append(el("pre", { textContent: run.summary.join("\n") }));
-      if (run.measurement !== undefined) sections.append(el("pre", { textContent: `Measurement: ${run.measurement}\n${JSON.stringify(run.settings ?? {})}` }));
+      appendLocalized(sections, el("h3", { textContent: run.label }));
+      if (run.summary) appendLocalized(sections, el("pre", { textContent: run.summary.join("\n") }));
+      if (run.measurement !== undefined) appendLocalized(sections, el("pre", { textContent: `Measurement: ${run.measurement}\n${JSON.stringify(run.settings ?? {})}` }));
       if (run.histogram) histogramPlot(sections, run.histogram, "Measurement");
       const result = run.result;
-      if (result.transfer) sections.append(el("pre", { textContent: `Gain: ${result.transfer.gain}\nInput resistance: ${result.transfer.inputResistance} Ohm\nOutput resistance: ${result.transfer.outputResistance} Ohm` }));
-      if (result.sensitivity) sections.append(el("pre", { textContent: result.sensitivity.map(r => `${r.device}: ${r.absolute} per unit, ${r.normalized} relative`).join("\n") }));
+      if (result.transfer) appendLocalized(sections, el("pre", { textContent: `Gain: ${result.transfer.gain}\nInput resistance: ${result.transfer.inputResistance} Ohm\nOutput resistance: ${result.transfer.outputResistance} Ohm` }));
+      if (result.sensitivity) appendLocalized(sections, el("pre", { textContent: result.sensitivity.map(r => `${r.device}: ${r.absolute} per unit, ${r.normalized} relative`).join("\n") }));
       if (result.axis) {
         const plot = new Plot(sections);
         plot.canvas.style.minHeight = "200px";
         const db = result.analysis === "ac" ? acDecibels(result) : undefined;
         plot.set(result.vectors.map((v, i) => ({ label: v.name, x: result.axis!.re, y: db?.get(v.name) ?? v.re, ...seriesStyle(i) })), { xLabel: result.axis.name, logX: result.axis.unit === "Hz" });
-      } else sections.append(el("pre", { textContent: result.vectors.map(v => `${v.name}: ${formatSI(v.re[0], v.unit)}`).join("\n") }));
+      } else appendLocalized(sections, el("pre", { textContent: result.vectors.map(v => `${v.name}: ${formatSI(v.re[0], v.unit)}`).join("\n") }));
     }
   }, 10);
-  win.body.append(sections);
+  appendLocalized(win.body, sections);
 }
 
 function histogramPlot(parent: HTMLElement, bins: { edges: number[]; counts: number[] }, label: string): void {
@@ -1750,11 +1756,11 @@ function measuredRuns(name: string, runs: SweepRun[], measurement: Measurement):
   grapher(name, runs);
   const win = resultWindow(`${name}: ${measurement.kind} ${measurement.vector}`, 540, 380, runs.map(r => r.result));
   win.body.style.overflow = "auto";
-  if (runs[0].summary) win.body.append(el("pre", { textContent: runs[0].summary.join("\n") }));
+  if (runs[0].summary) appendLocalized(win.body, el("pre", { textContent: runs[0].summary.join("\n") }));
   if (runs[0].histogram) histogramPlot(win.body, runs[0].histogram, `${measurement.kind} ${measurement.vector}`);
   const rows = el("pre");
-  pageRuns(win.body, runs, page => { rows.textContent = page.map(r => `${r.label}: ${formatSI(r.measurement!, "", 6)}${r.settings ? `  ${Object.entries(r.settings).map(([k, v]) => `${k}=${typeof v === "number" ? formatSI(v, "", 5).replace(/\s/g, "") : v}`).join(", ")}` : ""}`).join("\n"); });
-  win.body.append(rows);
+  pageRuns(win.body, runs, page => { setText(rows, page.map(r => `${r.label}: ${formatSI(r.measurement!, "", 6)}${r.settings ? `  ${Object.entries(r.settings).map(([k, v]) => `${k}=${typeof v === "number" ? formatSI(v, "", 5).replace(/\s/g, "") : v}`).join(", ")}` : ""}`).join("\n")); });
+  appendLocalized(win.body, rows);
 }
 
 async function runAnalysis(form: AnalysisForm): Promise<void> {
@@ -1782,7 +1788,7 @@ async function runAnalysis(form: AnalysisForm): Promise<void> {
       localStorage.setItem("microsim-analysis-batch", JSON.stringify(entries));
     } else plan = savedRequest(form.type, v);
     const runs = await runPlannedSimulation(netlist.text, doc.schematic, plan, (completed, fraction) => {
-      if (token === runToken) runState.textContent = `${name}: ${completed} runs complete, ${Math.round(fraction * 100)}% of current run`;
+      if (token === runToken) setText(runState, `${name}: ${completed} runs complete, ${Math.round(fraction * 100)}% of current run`);
     });
     if (token !== runToken) return;
     const result = runs[0].result;
@@ -1842,7 +1848,7 @@ function analysesDialog(): void {
     const outputOptions = el("datalist", { id: "outputs-list" }, ...choices.nets.map((net) => el("option", { value: `v(${net})` })));
     const sourceOptions = el("datalist", { id: "sources-list" }, ...choices.sources.map((name) => el("option", { value: name })));
     const partOptions = el("datalist", { id: "parts-list" }, ...choices.sweepable.map((name) => el("option", { value: name })));
-    box.append(netOptions, outputOptions, sourceOptions, partOptions);
+    appendLocalized(box, netOptions, outputOptions, sourceOptions, partOptions);
     const SUGGEST: Record<string, string> = { source: "sources-list", output: "outputs-list", input: "outputs-list", outerref: "parts-list", node: "nets-list", inp: "nets-list", inn: "nets-list", outp: "nets-list", outn: "nets-list", ref: "parts-list" };
     const render = () => {
       formState.type = select.value;
@@ -1855,7 +1861,7 @@ function analysesDialog(): void {
         noisefigure: "Uses 290 K. Include the stated source resistance in series with a voltage input source in the circuit; its thermal noise is included in the total.",
         batch: "Saved in this browser. Add analyses with Add to batch, then edit or reorder the JSON list. All entries use the current circuit and stop at the first error.",
       };
-      if (notes[select.value]) fields.append(el("p", { className: "muted", textContent: notes[select.value] }));
+      if (notes[select.value]) appendLocalized(fields, el("p", { className: "muted", textContent: notes[select.value] }));
       for (const [key, label, initial] of ANALYSIS_FIELDS[select.value]) {
         if (key === "at" && !["at", "gain"].includes(values.measurement ?? "max")) continue;
         if (key === "input" && values.measurement !== "gain") continue;
@@ -1867,16 +1873,16 @@ function analysesDialog(): void {
           ? el("select", {}, ...INNER_ANALYSES.map(([name, text]) => el("option", { value: name, textContent: text, selected: name === value })))
           : el("input", { value });
         if (SUGGEST[key]) input.setAttribute("list", SUGGEST[key]);
-        if (key === "ref" && !choices.sweepable.length) input.setAttribute("placeholder", "No named part with a value here");
+        if (key === "ref" && !choices.sweepable.length) bindAttribute(input, "placeholder", "No named part with a value here");
         values[key] = input.value;
         input.oninput = () => { values[key] = input.value; if (key === "measurement") render(); };
-        fields.append(el("label", { className: "field" }, label, input));
+        appendLocalized(fields, el("label", { className: "field" }, label, input));
       }
     };
     select.onchange = render;
-    box.append(el("label", { className: "field" }, "Analysis", select), fields);
+    appendLocalized(box, el("label", { className: "field" }, "Analysis", select), fields);
     render();
-    box.append(el("div", { className: "dialog-actions" },
+    appendLocalized(box, el("div", { className: "dialog-actions" },
       el("button", { textContent: "Cancel", onclick: close }),
       el("button", { textContent: "Add to batch", onclick: () => {
         try {
@@ -1888,7 +1894,7 @@ function analysesDialog(): void {
           localStorage.setItem("microsim-analysis-batch", entries);
           formState.values.batch = { entries };
           select.value = "batch"; render();
-        } catch (error) { dialog("Batch", (box, done) => { box.append(el("p", { textContent: friendly(error) }), el("button", { textContent: "OK", onclick: done })); }); }
+        } catch (error) { dialog("Batch", (box, done) => { appendLocalized(box, el("p", { textContent: friendly(error) }), el("button", { textContent: "OK", onclick: done })); }); }
       } }),
       el("button", { className: "primary", textContent: "Run", onclick: () => { close(); void runAnalysis(structuredClone(formState)); } }),
     ));
@@ -1906,7 +1912,7 @@ function askConfirm(title: string, message: string, action: string): Promise<boo
         close();
         resolve(value);
       };
-      box.append(el("p", { textContent: message }), el("div", { className: "dialog-actions" },
+      appendLocalized(box, el("p", { textContent: message }), el("div", { className: "dialog-actions" },
         el("button", { textContent: "Cancel", onclick: () => finish(false) }),
         el("button", { className: "primary", textContent: action, onclick: () => finish(true) }),
       ));
@@ -1922,7 +1928,7 @@ function askText(title: string, label: string, onDone: (value: string) => void, 
       close();
       if (value) onDone(value);
     };
-    box.append(el("label", { className: "field" }, label, input), el("div", { className: "dialog-actions" },
+    appendLocalized(box, el("label", { className: "field" }, label, input), el("div", { className: "dialog-actions" },
       el("button", { textContent: "Cancel", onclick: close }),
       el("button", { className: "primary", textContent: action, onclick: submit }),
     ));
@@ -1936,10 +1942,7 @@ function modelsDialog(): void {
     const area = el("textarea", { value: modelsDraft ?? doc.schematic.definitions, ariaLabel: "SPICE model text", spellcheck: false });
     area.style.cssText = "width:100%;height:240px;font:12px ui-monospace,Menlo,Consolas,monospace";
     area.oninput = () => { modelsDraft = area.value; };
-    box.append(
-      el("p", { className: "muted", textContent: "Paste .model or .subckt text from a manufacturer. Use subcircuits through a SPICE model block, by name." }),
-      area,
-      el("div", { className: "dialog-actions" },
+    appendLocalized(box, el("p", { className: "muted", textContent: "Paste .model or .subckt text from a manufacturer. Use subcircuits through a SPICE model block, by name." }), area, el("div", { className: "dialog-actions" },
         el("button", { textContent: "Cancel", onclick: () => { modelsDraft = undefined; close(); } }),
         el("button", { className: "primary", textContent: "Save", onclick: () => {
           modelsDraft = undefined;
@@ -1948,8 +1951,7 @@ function modelsDialog(): void {
           doc.notify();
           close();
         } }),
-      ),
-    );
+      ));
   });
 }
 
@@ -1967,10 +1969,10 @@ function titleBlockDialog(): void {
     const fields: [keyof TitleBlock, string][] = [["title", "Title"], ["author", "Drawn by"], ["company", "Company"], ["documentNumber", "Document number"], ["revision", "Revision"], ["date", "Date"]];
     const inputs = fields.map(([key, label]) => {
       const input = el("input", { ariaLabel: label, value: doc.schematic.titleBlock?.[key] ?? "" });
-      box.append(el("label", { className: "field" }, label, input));
+      appendLocalized(box, el("label", { className: "field" }, label, input));
       return [key, input] as const;
     });
-    box.append(el("div", { className: "dialog-actions" },
+    appendLocalized(box, el("div", { className: "dialog-actions" },
       el("button", { textContent: "Cancel", onclick: close }),
       el("button", { className: "primary", textContent: "Save", onclick: () => {
         const titleBlock: TitleBlock = {};
@@ -2005,7 +2007,7 @@ function printPage(pages: PrintPage[]): void {
     } catch (error) { writeLog(`Could not print: ${friendly(error)}`, "error"); }
   };
   frame.srcdoc = `<!doctype html><html><head><title>Microsim</title><style>@page{size:${page.width}mm ${page.height}mm;margin:0}html,body{margin:0;padding:0;background:white}body>svg{display:block;width:${page.width}mm;height:${page.height}mm;break-after:page}body>svg:last-child{break-after:auto}</style></head><body>${pages.map((p) => p.svg).join("")}</body></html>`;
-  document.body.append(frame);
+  appendLocalized(document.body, frame);
 }
 
 function printDialog(pdf = false): void {
@@ -2014,7 +2016,7 @@ function printDialog(pdf = false): void {
     box.style.width = "min(800px, 90vw)";
     const select = (label: string, choices: string[]) => {
       const input = el("select", { ariaLabel: label }, ...choices.map((choice) => el("option", { value: choice, textContent: choice })));
-      box.append(el("label", { className: "field" }, label, input));
+      appendLocalized(box, el("label", { className: "field" }, label, input));
       return input;
     };
     const paper = select("Paper", Object.keys(PAPER_SIZES));
@@ -2024,7 +2026,7 @@ function printDialog(pdf = false): void {
     orientation.value = drawnWidth > drawnHeight ? "Landscape" : "Portrait";
     const scale = select("Scale", ["Fit", "50%", "100%", "200%"]);
     const margin = el("input", { type: "number", min: 0, step: 1, value: "10", ariaLabel: "Margins (mm)" });
-    box.append(el("label", { className: "field" }, "Margins (mm)", margin));
+    appendLocalized(box, el("label", { className: "field" }, "Margins (mm)", margin));
     const preview = el("div");
     preview.style.cssText = "height:35vh;overflow:auto;background:#ddd;text-align:center";
     const message = el("p", { className: "muted" });
@@ -2033,13 +2035,13 @@ function printDialog(pdf = false): void {
       if (!pages.length) return;
       if (!pdf) { printPage(pages); close(); return; }
       submit.disabled = true;
-      submit.textContent = "Exporting...";
+      setText(submit, "Exporting...");
       try {
         const bytes = await printPagesToPdf(pages);
         const used = await saveFile(`${stem()}.pdf`, "pdf", bytes);
-        if (used) { statusText.textContent = isTauri() ? `Exported ${used}.` : `Download started: ${used}.`; close(); }
+        if (used) { setText(statusText, isTauri() ? `Exported ${used}.` : `Download started: ${used}.`); close(); }
       } catch (error) { writeLog(`Could not export PDF: ${friendly(error)}`, "error"); }
-      finally { submit.disabled = false; submit.textContent = "Export PDF"; }
+      finally { submit.disabled = false; setText(submit, "Export PDF"); }
     } });
     const update = () => {
       try {
@@ -2048,12 +2050,12 @@ function printDialog(pdf = false): void {
         preview.innerHTML = pages.map((p) => p.svg).join("");
         const svg = preview.querySelector("svg")!;
         svg.style.cssText = "height:100%;width:auto;max-width:100%";
-        message.textContent = pages.some((p) => p.clipped) ? "The schematic exceeds the drawing area and will be clipped. Choose Fit to include it all." : `${pages.length} sheet(s), including block definitions. Fixed scale uses 96 schematic units per inch at 100%.`;
+        setText(message, pages.some((p) => p.clipped) ? "The schematic exceeds the drawing area and will be clipped. Choose Fit to include it all." : `${pages.length} sheet(s), including block definitions. Fixed scale uses 96 schematic units per inch at 100%.`);
         submit.disabled = false;
-      } catch (error) { pages = []; preview.replaceChildren(); message.textContent = friendly(error); submit.disabled = true; }
+      } catch (error) { pages = []; preview.replaceChildren(); setText(message, friendly(error)); submit.disabled = true; }
     };
     for (const input of [paper, orientation, scale, margin]) input.oninput = update;
-    box.append(preview, message, el("div", { className: "dialog-actions" }, el("button", { textContent: "Cancel", onclick: close }), submit));
+    appendLocalized(box, preview, message, el("div", { className: "dialog-actions" }, el("button", { textContent: "Cancel", onclick: close }), submit));
     update();
   });
 }
@@ -2090,7 +2092,7 @@ function resetAfterLoad(): void {
   showLimitsBanner();
   savedPath = undefined;
   savedFormat = "microsim";
-  runState.textContent = "";
+  setText(runState, "");
   canvas.probes.clear();
   canvas.displays.clear();
   for (const view of views.values()) view.element.remove();
@@ -2155,7 +2157,7 @@ async function loadBytes(name: string, bytes: Uint8Array, path?: string): Promis
       showLimitsBanner();
       importedAnalyses = file.analyses;
       savedPath = path;
-      statusText.textContent = `Opened ${name}.`;
+      setText(statusText, `Opened ${name}.`);
       showFileIssues();
       return;
     }
@@ -2165,12 +2167,12 @@ async function loadBytes(name: string, bytes: Uint8Array, path?: string): Promis
       resetAfterLoad();
       importedAnalyses = deck.analyses;
       const count = deck.analyses.length;
-      statusText.textContent = `Opened ${name}. ${count
+      setText(statusText, `Opened ${name}. ${count
         ? `Simulate > Analyses from imported file runs its ${count === 1 ? "analysis" : `${count} analyses`}.`
-        : "Choose Analyses to simulate it."}`;
+        : "Choose Analyses to simulate it."}`);
       return;
     }
-    statusText.textContent = `Importing ${name}...`;
+    setText(statusText, `Importing ${name}...`);
     const { importMs14 } = await import("../importer/index");
     const started = performance.now();
     const result = importMs14(bytes, { retainSource: true });
@@ -2181,10 +2183,10 @@ async function loadBytes(name: string, bytes: Uint8Array, path?: string): Promis
     showLimitsBanner();
     importedAnalyses = result.analyses;
     if (result.format.application === "Microsim" && lower.endsWith(".ms14")) { savedFormat = "ms14"; savedPath = path; }
-    statusText.textContent = `Imported ${name} in ${Math.round(performance.now() - started)} ms.`;
+    setText(statusText, `Imported ${name} in ${Math.round(performance.now() - started)} ms.`);
     showFileIssues();
   } catch (error) {
-    statusText.textContent = "";
+    setText(statusText, "");
     writeLog(`Could not open ${name}: ${friendly(error)}`, "error");
   }
 }
@@ -2224,13 +2226,13 @@ async function saveCircuit(saveAs = false, format = savedFormat, flattenNative =
     if (isTauri()) {
       savedPath = used;
       doc.dirty = false;
-      statusText.textContent = `Saved ${used}.`;
+      setText(statusText, `Saved ${used}.`);
     } else {
       // Whether the file arrives is up to the browser and the person. A copy stays here in case it
       // doesn't, and without one the warning on closing stays on.
       writeStore(DOWNLOADED_KEY, contents);
       doc.dirty = readStore(DOWNLOADED_KEY) !== contents;
-      statusText.textContent = `Download started: ${used}. Each save downloads a new copy.`;
+      setText(statusText, `Download started: ${used}. Each save downloads a new copy.`);
     }
   } catch (error) {
     writeLog(`Could not save: ${friendly(error)}. Your circuit is still open.`, "error");
@@ -2240,7 +2242,7 @@ async function saveCircuit(saveAs = false, format = savedFormat, flattenNative =
 async function exportText(name: string, extension: string, contents: string): Promise<void> {
   try {
     const used = await saveFile(name, extension, contents);
-    if (used) statusText.textContent = isTauri() ? `Exported ${used}.` : `Download started: ${used}.`;
+    if (used) setText(statusText, isTauri() ? `Exported ${used}.` : `Download started: ${used}.`);
   } catch (error) {
     writeLog(`Could not export: ${friendly(error)}`, "error");
   }
@@ -2251,14 +2253,14 @@ function bomDialog(): void {
   const rows = billOfMaterials(doc.schematic);
   dialog("Bill of materials", (box, close) => {
     const table = el("div", { innerHTML: bomToHtml(rows) });
+    for(const heading of table.querySelectorAll('th'))setText(heading,heading.textContent);
     table.style.overflowX = "auto";
     for (const cell of table.querySelectorAll<HTMLElement>("th, td")) {
       cell.style.padding = "6px 12px";
       cell.style.textAlign = "left";
     }
     const document = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Bill of materials</title><style>body{font-family:sans-serif}table{border-collapse:collapse}th,td{padding:6px 12px;border:1px solid #ccc;text-align:left}</style><body>${bomToHtml(rows)}</body></html>`;
-    box.append(table, ...(!rows.length ? [el("p", { textContent: "There are no parts to include." })] : []),
-      el("div", { className: "dialog-actions" },
+    appendLocalized(box, table, ...(!rows.length ? [el("p", { textContent: "There are no parts to include." })] : []), el("div", { className: "dialog-actions" },
         el("button", { textContent: "Export CSV...", onclick: () => void exportText(`${stem()}-bom.csv`, "csv", bomToCsv(rows)) }),
         el("button", { textContent: "Export HTML...", onclick: () => void exportText(`${stem()}-bom.html`, "html", document) }),
         el("button", { className: "primary", textContent: "Close", onclick: close })));
@@ -2269,16 +2271,16 @@ function ercDialog(): void {
   commitTypedValue();
   const findings = electricalRulesCheck(doc.schematic);
   dialog("Electrical rules check", (box, close) => {
-    box.append(el("p", { textContent: findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"}. Click a finding to select its parts.` : "No electrical rule problems found." }));
+    appendLocalized(box, el("p", { textContent: findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"}. Click a finding to select its parts.` : "No electrical rule problems found." }));
     const list = el("ul");
     for (const finding of findings) {
       const text = `${finding.severity === "error" ? "Error" : "Warning"}: ${finding.message}`;
-      list.append(el("li", {}, finding.componentIds.length ? el("button", {
+      appendLocalized(list, el("li", {}, finding.componentIds.length ? el("button", {
         textContent: text,
         onclick: () => { close(); canvas.select(finding.componentIds); canvas.el.focus(); },
       }) : el("span", { textContent: text })));
     }
-    box.append(list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
+    appendLocalized(box, list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
   });
 }
 
@@ -2295,7 +2297,7 @@ let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
 
 function scheduleAutosave(): void {
   if (!doc.dirty || autosaveTimer) return;
-  autosaveTimer = setTimeout(writeAutosave, 2000);
+  autosaveTimer = setTimeout(writeAutosave, getPreferences().autosaveSeconds * 1000);
 }
 
 function writeAutosave(): void {
@@ -2379,7 +2381,7 @@ async function offerRecovery(): Promise<void> {
       };
       dialog("Recover your circuit?", (box, close) => {
         const pick = (value: "recover" | "discard") => { answer(value); close(); };
-        box.append(el("p", { textContent: `"${file.schematic.name}" wasn't saved when Microsim last closed.` }), el("div", { className: "dialog-actions" },
+        appendLocalized(box, el("p", { textContent: `"${file.schematic.name}" wasn't saved when Microsim last closed.` }), el("div", { className: "dialog-actions" },
           el("button", { textContent: "Discard it", onclick: () => pick("discard") }),
           el("button", { className: "primary", textContent: "Recover", onclick: () => pick("recover"), autofocus: true }),
         ));
@@ -2442,16 +2444,9 @@ window.addEventListener("drop", async (e) => {
 
 // Assistant panel
 function settingsDialog(afterSave?: () => void): void {
-  dialog("Assistant settings", (box, close) => {
-    const key = el("input", { type: "password", value: readKey(), placeholder: "sk-ant-...", autocomplete: "off", ariaLabel: "Anthropic API key" });
-    box.append(
-      el("label", { className: "field" }, "Anthropic API key", key),
-      el("p", { className: "muted", textContent: `${isTauri() ? "Stored unencrypted in this app's local storage on this computer." : "Kept only until you close this tab."} Your circuit and messages go to Anthropic only when you use the assistant.` }),
-      el("div", { className: "dialog-actions" },
-        el("button", { textContent: "Cancel", onclick: close }),
-        el("button", { className: "primary", textContent: "Save", onclick: () => { writeKey(key.value.trim()); close(); afterSave?.(); } }),
-      ),
-    );
+  showSettings(dialog,readKey,writeKey,saved=>{
+    setText(statusText, saved?'Settings saved.':'Storage is unavailable. Settings apply only for this session.');
+    afterSave?.();
   });
 }
 
@@ -2459,7 +2454,7 @@ function settingsDialog(afterSave?: () => void): void {
 const layoutOf = (sheet: Schematic) => JSON.stringify([sheet.components.map((c) => [c.x, c.y, c.rotation]), sheet.wires.map((w) => w.points), sheet.labels]);
 
 const assistant = new Assistant(doc, runSimulation, readKey, stopSimulation);
-const chatLog = el("div", { className: "chat-log", role: "log", ariaLive: "polite" });
+const chatLog = el("div", { className: "chat-log", role: "log", ariaLive: "polite", translate:false });
 // One panel for the app's lifetime: switching tabs must not orphan a run or lose its Stop button.
 let chat: HTMLElement | undefined;
 function chatPanel(): HTMLElement {
@@ -2475,8 +2470,8 @@ function chatPanel(): HTMLElement {
       return;
     }
     input.value = "";
-    const sent = el("div", { className: "msg user", textContent: text });
-    chatLog.append(sent);
+    const sent = el("div", { className: "msg user", textContent: text, translate:false });
+    appendLocalized(chatLog, sent);
     let bubble: HTMLElement | undefined;
     let reply = "";
     let frame = 0;
@@ -2496,8 +2491,8 @@ function chatPanel(): HTMLElement {
         onText(delta) {
           if (!bubble) {
             if (!delta.trim()) return;
-            bubble = el("div", { className: "msg assistant" });
-            chatLog.append(bubble);
+            bubble = el("div", { className: "msg assistant", translate:false });
+            appendLocalized(chatLog, bubble);
           }
           reply += delta;
           frame ||= requestAnimationFrame(draw);
@@ -2507,7 +2502,7 @@ function chatPanel(): HTMLElement {
           bubble = undefined;
           reply = "";
           toolRan = true;
-          chatLog.append(el("div", { className: "msg tool", textContent: summary }));
+          appendLocalized(chatLog, el("div", { className: "msg tool", textContent: summary }));
           chatLog.scrollTop = chatLog.scrollHeight;
         },
       });
@@ -2517,7 +2512,7 @@ function chatPanel(): HTMLElement {
       // Only a partial reply that the person chose to stop needs no second try.
       if (!toolRan && !(stopped && bubble)) input.value ||= text;
       if (!toolRan && !bubble) sent.remove();
-      chatLog.append(stopped
+      appendLocalized(chatLog, stopped
         ? el("div", { className: "msg tool", textContent: "Stopped." })
         : el("div", { className: "msg error", textContent: friendly(explainError(error)) }));
     } finally {
@@ -2570,6 +2565,7 @@ const MENUS: Record<string, MenuItem[]> = {
     // A native menu leaves focus in a field being typed in.
     ["Export schematic as SVG", () => { commitTypedValue(); void exportText(`${stem()}.svg`, "svg", schematicToSvg(doc.schematic)); }],
     ["Export SPICE netlist", () => { commitTypedValue(); void exportText(`${stem()}.cir`, "cir", buildNetlist(doc.schematic).text); }],
+    ["Settings...", () => settingsDialog(), `${mod}+,`],
   ],
   Examples: EXAMPLES.map((example): MenuItem => [example.name, () => void openExample(example)]),
   Reports: [
@@ -2606,7 +2602,7 @@ const MENUS: Record<string, MenuItem[]> = {
     ["Zoom in", () => canvas.zoomBy(1.25), "+"],
     ["Zoom out", () => canvas.zoomBy(0.8), "-"],
     ["Fit to window", () => canvas.fit(clearArea(sheetHost)), "F"],
-    ["Toggle voltages on wires", () => { showVoltages = !showVoltages; if (!showVoltages) canvas.probes.clear(); canvas.invalidate(); }],
+    ["Toggle voltages on wires", () => { savePreferences({...getPreferences(),showVoltages:!showVoltages}); }],
   ],
   Simulate: [
     ["Run", () => void simulateRun(), runKey],
@@ -2660,29 +2656,23 @@ const MENUS: Record<string, MenuItem[]> = {
       "The Assistant tab can build and test circuits for you. It needs an Anthropic API key.",
       "In a narrow window, the Panel button shows Properties and the Assistant.",
       "Design opens PCB layout, LabVIEW Web Services, a component catalogue and source editors for C/VHDL. Builds require npm run design:bridge and installed compilers. Tank, conveyor and styled instruments are in the palette.",
-    ]) list.append(el("li", { textContent: tip }));
-    box.append(list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
+    ]) appendLocalized(list, el("li", { textContent: tip }));
+    appendLocalized(box, list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
   })], ["What Microsim doesn't do", () => dialog("What Microsim doesn't do", (box, close) => {
     const list = el("ul");
     list.style.paddingLeft = "18px";
     for (const limit of [
-      "The built-in 8051 core runs programs with GPIO, timers and its serial port, and the Serial terminal instrument decodes what it sends. Imported NI 8051/8052 parts run on it: load their assembly source or HEX with Design > Microcontroller program. NI PIC parts and LCDs are still unsupported. External bus waveforms and electrical chip power behavior are not implemented.",
-      "Design > LabVIEW integration has an independent local numeric dataflow runtime and optional HTTP/native VI adapters. Local mode does not read .vi binaries. Native VI mode requires LabVIEW and is not yet verified against a real installation; synchronized NI co-simulation is not implemented.",
-      "Design > Component database imports embedded .ms14 parts, catalogue JSON and supported installed NI Jet databases through the local bridge. NI's collection is not bundled; native graphics and generated instance parameters are not reproduced.",
-      "Instruments are limited to oscilloscope, multimeter, wattmeter, Bode plotter, logic analyzer, function generator and clock.",
-      "Distortion, worst-case and RF analyses aren't available.",
-      "Sheets from files are flattened, so there's no hierarchical or multi-page editing.",
-      "File > Save as .ms14 writes new circuits with native symbols and connections (checked in Multisim 14.2). Imported circuits preserve original native records with parameter edits; structural edits to imported circuits currently require .microsim.",
-      "Design > PCB layout supports two-layer routing, plated vias and KiCad/Gerber/drill exports. Zones, autorouting, SMD pads, silkscreen and Ultiboard transfer are not implemented.",
+      '8051/8052 and PIC16F84A/F877A firmware, a character LCD and keypad are supported. PIC EEPROM, watchdog and advanced peripherals remain unsupported. Imported NI LCD/keypad parts need conversion.',
+      'The local dataflow controller works independently. Native LabVIEW VI execution requires LabVIEW; synchronized NI co-simulation is not implemented.',
+      'The component catalogue supports installed NI database import. Vendor libraries, models and native graphics are not bundled.',
+      'Pages, shared hierarchical blocks, Monte Carlo, worst-case, noise and distortion analyses are available. A full RF network analyzer is not implemented.',
+      'PCB tools include footprints, SMD pads, silkscreen, copper pours and a two-layer autorouter. Thermal reliefs, island removal, manufacturing qualification and Ultiboard transfer are not implemented.',
+      'Imported .ms14 parameter edits preserve native records. Structural edits use flattened export. General native simulation equivalence is not verified.',
       "Device models and logic levels are approximations, so results may differ from other simulators.",
-    ]) list.append(el("li", { textContent: limit }));
-    box.append(list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
+    ]) appendLocalized(list, el("li", { textContent: limit }));
+    appendLocalized(box, list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
   })], ["About Microsim", () => dialog("Microsim", (box, close) => {
-    box.append(
-      el("p", { textContent: "A lightweight circuit simulator with an AI assistant." }),
-      el("p", { className: "muted", textContent: "Microsim is an independent project and is not affiliated with or endorsed by National Instruments or Emerson." }),
-      el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })),
-    );
+    appendLocalized(box, el("p", { textContent: "A lightweight circuit simulator with an AI assistant." }), el("p", { className: "muted", textContent: "Microsim is an independent project and is not affiliated with or endorsed by National Instruments or Emerson." }), el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
   })]],
 };
 
@@ -2705,16 +2695,16 @@ for (const [title, items] of Object.entries(MENUS)) {
     if (had) return;
     const list = el("div", { className: "menu-items", role: "menu" });
     for (const [label, action, shortcut] of items) {
-      list.append(el("button", { role: "menuitem", onclick: () => { closeAnyMenu(); action(); } }, label, el("kbd", { textContent: shortcut ?? "" })));
+      appendLocalized(list, el("button", { role: "menuitem", onclick: () => { closeAnyMenu(); action(); } }, label, el("kbd", { textContent: shortcut ?? "" })));
     }
-    wrap.append(list);
+    appendLocalized(wrap, list);
     openMenu = list;
     button.setAttribute("aria-expanded", "true");
     // Keyboard users move straight into the menu. A mouse click has detail above 0.
     if (e.detail === 0) list.querySelector<HTMLElement>("button")?.focus();
   };
-  wrap.append(button);
-  menubar.append(wrap);
+  appendLocalized(wrap, button);
+  appendLocalized(menubar, wrap);
 }
 // A pinch over the panels would zoom the whole page and leave the app that way. Safari sends
 // gesture events, and other Mac browsers a Ctrl+wheel. Cmd and plus still zoom the page.
@@ -2728,22 +2718,7 @@ window.addEventListener("pointerdown", (e) => {
 });
 
 const toolButton = (label: string, title: string, action: () => void) => el("button", { textContent: label, title, onclick: action });
-toolbar.append(
-  toolButton("Open", "Open a circuit, including .ms14 files", () => void openCircuit()),
-  toolButton("Save", "Save as an Microsim circuit", () => void saveCircuit()),
-  el("span", { className: "sep" }),
-  toolButton("Undo", "Undo", () => undoDocument()),
-  toolButton("Redo", "Redo", () => undoDocument(true)),
-  toolButton("Rotate", "Rotate selection (R)", () => canvas.rotateSelected()),
-  toolButton("Fit", "Fit to window (F)", () => canvas.fit(clearArea(sheetHost))),
-  el("span", { className: "sep" }),
-  runButton, stopButton,
-  el("label", { className: "stop-at-label" }, "Stop at ", stopAtInput),
-  speedSelect,
-  toolButton("Analyses", `Choose an analysis (${analysesKey})`, analysesDialog),
-  panelButton,
-  runState,
-);
+appendLocalized(toolbar, toolButton("Open", "Open a circuit, including .ms14 files", () => void openCircuit()), toolButton("Save", "Save as an Microsim circuit", () => void saveCircuit()), el("span", { className: "sep" }), toolButton("Undo", "Undo", () => undoDocument()), toolButton("Redo", "Redo", () => undoDocument(true)), toolButton("Rotate", "Rotate selection (R)", () => canvas.rotateSelected()), toolButton("Fit", "Fit to window (F)", () => canvas.fit(clearArea(sheetHost))), el("span", { className: "sep" }), runButton, stopButton, el("label", { className: "stop-at-label" }, "Stop at ", stopAtInput), speedSelect, toolButton("Analyses", `Choose an analysis (${analysesKey})`, analysesDialog), panelButton, toolButton('Settings','Settings',()=>settingsDialog()), runState);
 
 function undoDocument(redo = false): void {
   // A focused field would keep showing the value from before the undo.
@@ -2848,6 +2823,7 @@ window.addEventListener("keydown", (e) => {
   const target = e.target as HTMLElement;
   const typing = target.matches?.("input, textarea, select") ?? false;
   const key = e.key.toLowerCase();
+  if(command&&key===','){e.preventDefault();settingsDialog();return;}
   if (command && key === "o") { e.preventDefault(); void openCircuit(); return; }
   if (command && key === "p") { e.preventDefault(); printDialog(); return; }
   if (command && key === "s") { e.preventDefault(); void saveCircuit(e.shiftKey); return; }
@@ -2906,6 +2882,7 @@ window.addEventListener("keydown", (e) => {
 
 // Panels follow the appearance by themselves, but what's drawn on a canvas has to be drawn again.
 window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  applyAppearance(getPreferences());
   renderPalette();
   canvas.invalidate();
   redrawPlots();
@@ -2944,17 +2921,27 @@ void guardWindowClose(() => doc.dirty, async () => {
 // In the desktop app the menus move to the Mac menu bar. Items that the Edit menu's standard
 // entries already cover are left out so they stay usable in text fields.
 const STANDARD_EDIT = new Set(["Undo", "Redo", "Copy", "Paste", "Select all"]);
-void installNativeMenu("Microsim", Object.fromEntries(Object.entries(MENUS).map(([title, items]) => [
+let nativeMenuTask=Promise.resolve();
+function refreshNativeMenu():void { nativeMenuTask=nativeMenuTask.then(()=>installNativeMenu("Microsim", Object.fromEntries(Object.entries(MENUS).map(([title, items]) => [
   title,
   items
     .filter(([label]) => !(title === "Edit" && isMac() && STANDARD_EDIT.has(label)))
     // These shortcuts never reach keydown, so they settle a drag here.
     .map(([label, action, shortcut]) => ({ label, action: () => { if (doc.settle()) action(); }, accelerator: nativeAccelerator(shortcut) })),
-]))).then((native) => {
+])))).then((native) => {
   if (native) menubar.hidden = true;
 }).catch((error) => {
   // The in-window menus still work, so this only costs the Mac menu bar.
   console.error("Could not install the native menu", error);
+}); }
+refreshNativeMenu();
+onLocaleChange(refreshNativeMenu);
+subscribePreferences(p=>{
+  applyAppearance(p);
+  showVoltages=p.showVoltages;
+  if(!showVoltages)canvas.probes.clear();
+  renderPalette();canvas.invalidate();redrawPlots();
+  if(autosaveTimer){clearTimeout(autosaveTimer);autosaveTimer=undefined;scheduleAutosave();}
 });
 
 // Lets browser-driven tests find exact on-screen positions. Removed from production builds.

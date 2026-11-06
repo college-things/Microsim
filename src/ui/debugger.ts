@@ -1,3 +1,4 @@
+import { appendLocalized, bindProperties, setText } from './i18n';
 // A debugger window for an 8051 running in a live simulation: source listing with breakpoints, registers,
 // ports, and pause, continue and single-step. The commands travel to the simulation worker through `send`.
 import type { SchComponent } from "../core/schematic";
@@ -31,16 +32,16 @@ export function createDebugger(host: HTMLElement, comp: SchComponent, send: (com
   status.className = "muted";
   const button = (label: string, title: string, action: () => void) => {
     const b = document.createElement("button");
-    b.textContent = label;
-    b.title = title;
+    setText(b, label);
+    bindProperties(b, {title: title});
     b.onclick = action;
-    bar.append(b);
+    appendLocalized(bar, b);
     return b;
   };
   const pause = button("Pause", "Stop after the current instruction", () => send({ pause: true }));
   const resume = button("Continue", "Run until the next breakpoint", () => send({ resume: true }));
   const step = button("Step", "Execute one instruction", () => send({ step: true }));
-  bar.append(status);
+  appendLocalized(bar, status);
 
   const registers = document.createElement("pre");
   registers.className = "debugger-registers";
@@ -56,35 +57,36 @@ export function createDebugger(host: HTMLElement, comp: SchComponent, send: (com
       const result = isMcuPic(comp)?assemblePic(comp.params.asm,(comp.params.variant??comp.kind) as PicVariant):assemble51(comp.params.asm);
       source = { lines: comp.params.asm.split(/\r?\n/), listing: result.listing };
     } catch (error) {
-      listing.textContent = `The saved source doesn't assemble: ${error instanceof Error ? error.message : String(error)}`;
+      setText(listing, `The saved source doesn't assemble: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   const addressRow = document.createElement("label");
   addressRow.className = "field";
   const addressInput = document.createElement("input");
-  addressInput.placeholder = "e.g. 0013 0020";
-  addressRow.append("Breakpoints (hex addresses)", addressInput);
+  bindProperties(addressInput, {placeholder: "e.g. 0013 0020"});
+  appendLocalized(addressRow, "Breakpoints (hex addresses)", addressInput);
   if (source) {
     const byLine = new Map(source.listing.map((entry) => [entry.line, entry.address]));
     source.lines.forEach((text, i) => {
       const row = document.createElement("div");
       row.className = "debugger-line";
+      row.translate=false;
       const address = byLine.get(i + 1);
-      row.textContent = `${address === undefined ? "    " : hex(address, 4)}  ${text}`;
+      setText(row, `${address === undefined ? "    " : hex(address, 4)}  ${text}`);
       if (address !== undefined) {
         lineOf.set(address, row);
         row.classList.add("code");
-        row.title = "Click to set or clear a breakpoint";
+        bindProperties(row, {title: "Click to set or clear a breakpoint"});
         row.onclick = () => {
           if (set.has(address)) set.delete(address); else set.add(address);
           row.classList.toggle("breakpoint", set.has(address));
           send({ breakpoints: [...set] });
         };
       }
-      listing.append(row);
+      appendLocalized(listing, row);
     });
   } else if (!listing.textContent) {
-    listing.textContent = "No source is saved with this part, so breakpoints are set by address.";
+    setText(listing, "No source is saved with this part, so breakpoints are set by address.");
     addressInput.onchange = () => {
       set.clear();
       for (const token of addressInput.value.split(/[\s,;]+/).filter(Boolean)) {
@@ -94,7 +96,7 @@ export function createDebugger(host: HTMLElement, comp: SchComponent, send: (com
       send({ breakpoints: [...set] });
     };
   }
-  win.body.append(bar, registers, ...(source ? [] : [addressRow]), listing);
+  appendLocalized(win.body, bar, registers, ...(source ? [] : [addressRow]), listing);
 
   let current: HTMLElement | undefined;
   const show = (enabled: boolean) => { for (const b of [pause, resume, step]) b.disabled = !enabled; };
@@ -105,8 +107,8 @@ export function createDebugger(host: HTMLElement, comp: SchComponent, send: (com
     breakpoints: () => [...set],
     idle(message) {
       show(false);
-      status.textContent = message;
-      registers.textContent = "";
+      setText(status, message);
+      setText(registers, "");
       current?.classList.remove("current");
       current = undefined;
     },
@@ -116,18 +118,18 @@ export function createDebugger(host: HTMLElement, comp: SchComponent, send: (com
       pause.disabled = halted;
       resume.disabled = !halted;
       step.disabled = !halted;
-      status.textContent = halted ? `Paused at ${hex(state.pc, 4)}H` : "Running";
+      setText(status, halted ? `Paused at ${hex(state.pc, 4)}H` : "Running");
       const flags = ["CY", "AC", "F0", "RS1", "RS0", "OV", "", "P"].map((name, i) => (name && (state.psw >> (7 - i)) & 1 ? name : "")).filter(Boolean).join(" ") || "-";
-      registers.textContent = [
+      setText(registers, [
         `PC ${hex(state.pc, 4)}  A ${hex(state.a, 2)}  B ${hex(state.b, 2)}  SP ${hex(state.sp, 2)}  DPTR ${hex(state.dptr, 4)}  PSW ${hex(state.psw, 2)} (${flags})`,
         state.registers.map((r, i) => `R${i} ${hex(r, 2)}`).join("  "),
         `${state.ports.map((p, i) => `P${i} ${hex(p, 2)}`).join("  ")}   cycles ${state.cycles}   t = ${(state.time * 1e3).toPrecision(5)} ms`,
-      ].join("\n");
-      if(state.kind==='pic16')registers.textContent=[
+      ].join("\n"));
+      if(state.kind==='pic16')setText(registers, [
         `PC ${hex(state.pc,4)}  W ${hex(state.w!,2)}  STATUS ${hex(state.status!,2)}  FSR ${hex(state.fsr!,2)}  PCLATH ${hex(state.pclath!,2)}  bank ${state.bank}  SP ${state.sp}`,
         state.ports.map((v,p)=>`PORT${String.fromCharCode(65+p)} ${hex(v,2)} TRIS ${hex(state.tris![p],2)}`).join('  '),
         `cycles ${state.cycles}   t = ${(state.time*1e3).toPrecision(5)} ms`,
-      ].join('\n');
+      ].join('\n'));
       current?.classList.remove("current");
       current = halted ? lineOf.get(state.pc) : undefined;
       if (current) {

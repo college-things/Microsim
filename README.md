@@ -6,6 +6,10 @@ Microsim is an independent project. It is not affiliated with or endorsed by Nat
 
 ## Develop
 
+Open **Settings** in the toolbar or press **Ctrl/Cmd+,** to choose English, Ukrainian or Russian, a system/light/dark/midnight/high-contrast theme, accent color, text size, reduced motion, editor grid and snapping, live wire voltages, and recovery autosave delay. Changes preview immediately; Save keeps them locally and Cancel restores the previous preferences. Restore defaults keeps circuit data and the assistant key.
+
+Translations cover interface labels and built-in part properties. Circuit names, notes, net names, component values, SPICE, firmware source, expressions, and units remain as authored. Technical diagnostics from external tools may remain in English. UI translations live in `src/ui/locales/messages.ts`; explicit text bindings in `src/ui/i18n.ts` retain the original keys for live language switching.
+
 ```bash
 npm install
 ```

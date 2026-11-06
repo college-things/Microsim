@@ -6,9 +6,11 @@ import type { PartDisplay } from "../core/indicators";
 import type { Point, SchComponent, Wire } from "../core/schematic";
 import { blockSymbol } from "../core/hierarchy";
 import { isMac } from "./platform";
+import { getPreferences } from './preferences';
+import { bindAttribute } from './i18n';
 
 const GRID = 10;
-const snap = (v: number) => Math.round(v / GRID) * GRID;
+const snap = (v: number) => getPreferences().snapToGrid ? Math.round(v / GRID) * GRID : v;
 
 /** A Mac's Ctrl+click means right-click, though it arrives as the main button. */
 export const isSecondaryClick = (e: Pick<MouseEvent, "button" | "ctrlKey">, mac: boolean) =>
@@ -140,7 +142,7 @@ export class SchematicCanvas {
     this.el.addEventListener("dblclick", (e) => this.doubleClick(e));
     this.el.addEventListener("wheel", (e) => this.wheel(e), { passive: false });
     this.el.setAttribute("role", "application");
-    this.el.setAttribute("aria-label", "Schematic. Arrow keys move the selection, R rotates, M mirrors, Delete removes.");
+    bindAttribute(this.el,"aria-label", "Schematic. Arrow keys move the selection, R rotates, M mirrors, Delete removes.");
     // WebKit reports trackpad pinches as gesture events rather than wheel events. The scale runs
     // from the start of the pinch, so reversing after hitting a zoom limit returns to that zoom.
     let pinchFrom = 1;
@@ -791,7 +793,7 @@ export class SchematicCanvas {
     ctx.fillRect(0, 0, w, h);
 
     const step = GRID * this.zoom * (this.zoom < 0.6 ? 5 : 1);
-    if (step >= 6) {
+    if (getPreferences().showGrid && step >= 6) {
       ctx.fillStyle = dot;
       for (let x = ((this.ox % step) + step) % step; x < w; x += step) {
         for (let y = ((this.oy % step) + step) % step; y < h; y += step) ctx.fillRect(x, y, 1, 1);
