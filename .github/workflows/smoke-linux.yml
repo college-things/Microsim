@@ -21,7 +21,7 @@ jobs:
       - name: Build dependencies and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb imagemagick xdotool
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb imagemagick xdotool fluxbox
       - run: npm ci
       - run: npx tauri build --bundles deb
       - name: Launch, open an example and run it
@@ -32,11 +32,14 @@ jobs:
           export WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1
           Xvfb :99 -screen 0 1440x900x24 &
           sleep 3
+          # Without a window manager the app's window is never mapped, and nothing can be captured.
+          fluxbox > /dev/null 2>&1 &
+          sleep 2
           microsim > launch.log 2>&1 &
           pid=$!
           sleep 15
           win0=$(xdotool search --name '^Microsim$' | head -1)
-          import -window "${win0:-root}" launched.png
+          import -window root launched.png || true
           # The window title is Microsim; drive its menus with the keyboard-free xdotool search.
           win=$(xdotool search --name '^Microsim$' | head -1)
           echo "window: $win" >> launch.log
@@ -45,11 +48,11 @@ jobs:
           if [ -n "$win" ]; then
             xdotool windowactivate --sync "$win" || true
             xdotool mousemove --window "$win" 150 15 click 1 && sleep 1
-            import -window root menu.png
+            import -window root menu.png || true
             xdotool key Down Return && sleep 3
             xdotool key F5 && sleep 10
           fi
-          import -window "${win:-root}" running.png
+          import -window root running.png || true
           kill -0 "$pid"
           kill "$pid"
           cat launch.log
