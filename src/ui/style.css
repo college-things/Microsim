@@ -260,3 +260,6 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
 .logic-table { overflow: auto; max-height: 220px; }
 .logic-table table { border-collapse: collapse; font: 12px ui-monospace, Consolas, monospace; }
 .logic-table th, .logic-table td { padding: 2px 8px; text-align: center; border-bottom: 1px solid var(--line, #3334); }
+
+.keypad-grid { display: grid; grid-template-columns: repeat(4, 40px); gap: 6px; margin: 6px 0; }
+.keypad-grid button { height: 36px; font: 600 15px ui-monospace, Consolas, monospace; touch-action: none; }

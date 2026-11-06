@@ -3,6 +3,9 @@ import { parseWords, wordGeneratorSources } from "./measure";
 import { PART_BY_KIND } from "./library";
 import type { Graphic, Point, SchComponent, Schematic } from "./schematic";
 
+/** Keypad legends, row by row: the key at row r, column c is KEYPAD_KEYS[4r + c]. */
+export const KEYPAD_KEYS = ["1", "2", "3", "A", "4", "5", "6", "B", "7", "8", "9", "C", "*", "0", "#", "D"];
+
 export interface NetlistResult {
   text: string;
   /** Net name per component id and pin name. Unconnected pins are absent. */
@@ -184,6 +187,10 @@ function instrumentSpice(comp: SchComponent): string {
   if (comp.kind === "switch") {
     return "R{ref} {pin:1} {pin:2} " + (p.state === "closed" ? "1m" : "1G");
   }
+  if (comp.kind === "keypad4x4") {
+    // Each key joins its row and column: 10 ohm while pressed, 100 Mohm otherwise.
+    return KEYPAD_KEYS.map((key, i) => `R{ref}_${i} {pin:R${(i >> 2) + 1}} {pin:C${(i & 3) + 1}} ${p.pressed === key ? "10" : "100meg"}`).join("\n");
+  }
   if (comp.kind === "potentiometer") {
     const total = parseValue(p.value) || 1;
     const fraction = Math.min(1, Math.max(0, parseValue(p.percent) / 100));
@@ -273,7 +280,7 @@ function checkedParams(comp: SchComponent, errors: string[]): Record<string, str
 }
 
 export function componentTemplate(comp: SchComponent): string {
-  return comp.instrument || comp.kind === "switch" || comp.kind === "potentiometer" ? instrumentSpice(comp) : comp.spice;
+  return comp.instrument || comp.kind === "switch" || comp.kind === "potentiometer" || comp.kind === "keypad4x4" ? instrumentSpice(comp) : comp.spice;
 }
 
 /** Names a part for SPICE so that a display name can never change what the part is. */

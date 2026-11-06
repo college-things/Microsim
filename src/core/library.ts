@@ -431,6 +431,20 @@ export const PARTS: PartDef[] = [
   });
 }
 
+// 4x4 matrix keypad: each key joins its row and column (see the keypad case in netlist.ts).
+PARTS.push({
+  kind: "keypad4x4", name: "Keypad 4x4", category: "Digital", prefix: "KP",
+  pins: [...[1, 2, 3, 4].map((n, i) => ({ name: `R${n}`, x: -60, y: -30 + i * 20 })), ...[1, 2, 3, 4].map((n, i) => ({ name: `C${n}`, x: -30 + i * 20, y: 70 }))],
+  params: [{ key: "pressed", label: "Pressed key", default: "none", options: ["none", "1", "2", "3", "A", "4", "5", "6", "B", "7", "8", "9", "C", "*", "0", "#", "D"] }],
+  spice: "",
+  graphics: [
+    rect(-45, -45, 90, 100),
+    ...[1, 2, 3, 4].map((_, i) => line(-60, -30 + i * 20, -45, -30 + i * 20)),
+    ...[1, 2, 3, 4].map((_, i) => line(-30 + i * 20, 55, -30 + i * 20, 70)),
+    ..."123A456B789C*0#D".split("").flatMap((key, i) => [rect(-38 + (i & 3) * 20, -38 + (i >> 2) * 20, 16, 16), text(-30 + (i & 3) * 20, -30 + (i >> 2) * 20, key, 8)]),
+  ],
+});
+
 // Original process models. Signal voltages are engineering units, referred to GND.
 PARTS.push({
   kind: "holding-tank", name: "Holding tank", category: "Analog", prefix: "XTANK",

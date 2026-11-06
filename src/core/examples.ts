@@ -268,6 +268,130 @@ EXAMPLES.push({
   },
 });
 
+EXAMPLES.push({
+  name: "8051 keypad and LCD",
+  build(doc) {
+    const program = assemble51(KEYPAD_SOURCE).code;
+    const mcu = doc.addPart("mcu8051", -160, 0, { frequency: "12Meg", code: Array.from(program, (b) => b.toString(16).padStart(2, "0")).join(""), asm: KEYPAD_SOURCE });
+    const lcd = doc.addPart("lcd16x2", 160, -160);
+    const keypad = doc.addPart("keypad4x4", -420, 40);
+    const gnd = doc.addPart("ground", 0, 200);
+    doc.connectPins(mcu, "RST", gnd, "g");
+    doc.connectPins(mcu, "P2.0", lcd, "RS");
+    doc.connectPins(mcu, "P2.1", lcd, "E");
+    doc.connectPins(lcd, "RW", gnd, "g");
+    for (const bit of [4, 5, 6, 7]) doc.connectPins(mcu, `P2.${bit}`, lcd, `D${bit}`);
+    for (const n of [1, 2, 3, 4]) {
+      doc.connectPins(keypad, `R${n}`, mcu, `P1.${n - 1}`);
+      doc.connectPins(keypad, `C${n}`, mcu, `P1.${n + 3}`);
+    }
+    doc.schematic.texts.push({ id: "keypad-explanation", x: -300, y: 260, text: "Run it, select the keypad and hold a key (in Properties, or on your keyboard). The LCD shows it." });
+  },
+});
+
+/** Scans a 4x4 keypad on P1 (rows P1.0-P1.3 out, columns P1.4-P1.7 in) and shows the key on the LCD. */
+const KEYPAD_SOURCE = `RSF     BIT 20H.0
+LASTKEY DATA 30H
+        ORG 0
+        MOV SP,#60H
+        MOV A,#30H         ; LCD power-up in 4-bit mode, as in "8051 LCD hello"
+        ACALL NIBBLE
+        ACALL NIBBLE
+        ACALL NIBBLE
+        MOV A,#20H
+        ACALL NIBBLE
+        MOV A,#28H
+        ACALL CMD
+        MOV A,#0CH
+        ACALL CMD
+        MOV A,#06H
+        ACALL CMD
+        MOV A,#01H
+        ACALL CMD
+        MOV DPTR,#PROMPT
+        ACALL PRINT
+        MOV LASTKEY,#0
+MAIN:   MOV R2,#0          ; row being scanned
+SCAN:   MOV A,R2
+        MOV DPTR,#ROWS
+        MOVC A,@A+DPTR
+        MOV P1,A           ; one row low, the columns pulled high
+        NOP
+        NOP
+        MOV A,P1
+        CPL A
+        ANL A,#0F0H        ; columns pulled low by a pressed key
+        JNZ FOUND
+        INC R2
+        CJNE R2,#4,SCAN
+        MOV LASTKEY,#0     ; nothing pressed: the next press shows even if it repeats
+        SJMP MAIN
+FOUND:  SWAP A
+        MOV R3,#0
+COLUMN: JB ACC.0,GOT
+        RR A
+        INC R3
+        SJMP COLUMN
+GOT:    MOV A,R2           ; key = row * 4 + column
+        RL A
+        RL A
+        ADD A,R3
+        MOV DPTR,#KEYS
+        MOVC A,@A+DPTR
+        CJNE A,LASTKEY,NEWKEY
+        SJMP MAIN
+NEWKEY: MOV LASTKEY,A
+        PUSH ACC
+        MOV A,#0C5H        ; second line, after "Key: "
+        ACALL CMD
+        POP ACC
+        ACALL DAT
+        SJMP MAIN
+
+CMD:    CLR RSF
+        SJMP SEND
+DAT:    SETB RSF
+SEND:   PUSH ACC
+        ACALL NIBBLE
+        POP ACC
+        SWAP A
+        ACALL NIBBLE
+        ACALL DELAY
+        RET
+NIBBLE: ANL A,#0F0H
+        JNB RSF,NOTDATA
+        ORL A,#01H
+NOTDATA: MOV P2,A
+        SETB P2.1
+        NOP
+        CLR P2.1
+        RET
+PRINT:  CLR A
+        MOVC A,@A+DPTR
+        JZ DONE
+        ACALL DAT
+        INC DPTR
+        SJMP PRINT
+DONE:   MOV A,#0C0H
+        ACALL CMD
+        MOV DPTR,#KEYLABEL
+PRINT2: CLR A
+        MOVC A,@A+DPTR
+        JZ DONE2
+        ACALL DAT
+        INC DPTR
+        SJMP PRINT2
+DONE2:  RET
+DELAY:  MOV R7,#100
+        DJNZ R7,$
+        RET
+ROWS:   DB 0FEH,0FDH,0FBH,0F7H
+KEYS:   DB "123A456B789C*0#D"
+PROMPT: DB "Press a key",0
+KEYLABEL: DB "Key: ",0
+        END
+`;
+
 /** Drives an HD44780-style LCD in 4-bit mode: RS = P2.0, E = P2.1, D4-D7 = P2.4-P2.7. */
 const LCD_SOURCE = `RSF     BIT 20H.0          ; register select for the next transfer
         ORG 0

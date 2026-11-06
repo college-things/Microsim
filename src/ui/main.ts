@@ -3,7 +3,7 @@ import { Assistant, explainError, Stopped } from "../agent/assistant";
 import { acDecibels, acSignals, findVector, sweepValues, type AnalysisPlan, type BatchEntry, type Measurement, type MeasurementKind, type SweepAxis, type SweepRun } from "../core/analyses";
 import { Doc, newId } from "../core/doc";
 import { PART_BY_KIND, PARTS } from "../core/library";
-import { buildNetlist, changesOverTime, frequencyProblem, listSources, parseValue, pinNetsKey, pinWorld, readValue, resolveSource, runSignature } from "../core/netlist";
+import { KEYPAD_KEYS, buildNetlist, changesOverTime, frequencyProblem, listSources, parseValue, pinNetsKey, pinWorld, readValue, resolveSource, runSignature } from "../core/netlist";
 import type { ImportIssue, SchComponent, Schematic } from "../core/schematic";
 import type { AnalysisRequest, SimResult } from "../core/sim";
 import { runSimulation, runPlannedSimulation, stopSimulation } from "../sim/client";
@@ -641,7 +641,28 @@ function stepVariable(comp: SchComponent, down: boolean): number {
   return Math.min(100, Math.max(0, comp.interactive.percent + (down ? -step : step)));
 }
 
+/** Presses a keypad key while the pointer or key is held, as a live value change. */
+function pressKeypad(comp: SchComponent, key: string): void {
+  if (comp.params.pressed === key) return;
+  changeSetting(() => { comp.params.pressed = key; });
+}
+
+function appendKeypad(wrap: HTMLElement, comp: SchComponent): void {
+  const grid = el("div", { className: "keypad-grid" });
+  const id = comp.id;
+  const part = () => doc.schematic.components.find((c) => c.id === id);
+  for (const key of KEYPAD_KEYS) {
+    const button = el("button", { textContent: key, ariaLabel: `Press ${key}` });
+    // Held, not clicked: firmware scanning the keypad needs the key down long enough to see it.
+    button.onpointerdown = (e) => { button.setPointerCapture(e.pointerId); const p = part(); if (p) pressKeypad(p, key); };
+    button.onpointerup = button.onpointercancel = () => { const p = part(); if (p) pressKeypad(p, "none"); };
+    grid.append(button);
+  }
+  wrap.append(el("p", { className: "muted", textContent: "Hold a key to press it. With the keypad selected, keys 0-9, A-D, * and # on your keyboard work too." }), grid);
+}
+
 function appendInteractive(wrap: HTMLElement, comp: SchComponent): void {
+  if (comp.kind === "keypad4x4") { appendKeypad(wrap, comp); return; }
   const spec = comp.interactive;
   if (spec?.kind === "switch") {
     const hint = spec.key ? ` (key ${spec.key})` : "";
@@ -2648,6 +2669,11 @@ window.addEventListener("keyup", (e) => {
   releaseButtons(letGo);
 });
 
+window.addEventListener("keyup", (e) => {
+  const keypad = doc.schematic.components.find((c) => c.kind === "keypad4x4" && c.params.pressed === e.key.toUpperCase());
+  if (keypad) pressKeypad(keypad, "none");
+});
+
 window.addEventListener("keydown", (e) => {
   // A dialog owns the keyboard, or letters typed at it would edit the circuit behind it.
   if (document.querySelector(".overlay")) return;
@@ -2658,6 +2684,14 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   const command = e.metaKey || e.ctrlKey;
+  // A selected keypad takes its own legends from the keyboard, held for as long as the key is.
+  const keypad = !command && !e.altKey && canvas.selection.size === 1 && !(e.target as HTMLElement).matches?.("input, textarea, select")
+    ? doc.schematic.components.find((c) => c.kind === "keypad4x4" && canvas.selection.has(c.id)) : undefined;
+  if (keypad && KEYPAD_KEYS.includes(e.key.toUpperCase())) {
+    e.preventDefault();
+    if (!e.repeat) pressKeypad(keypad, e.key.toUpperCase());
+    return;
+  }
   // So does an open menu, wherever focus happens to be, except that a shortcut closes it and acts.
   if (openMenu && command && e.key !== "Meta" && e.key !== "Control") closeAnyMenu();
   if (openMenu && !command) {
