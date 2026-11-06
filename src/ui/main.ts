@@ -2447,7 +2447,7 @@ const STANDARD_EDIT = new Set(["Undo", "Redo", "Copy", "Paste", "Select all"]);
 void installNativeMenu("Microsim", Object.fromEntries(Object.entries(MENUS).map(([title, items]) => [
   title,
   items
-    .filter(([label]) => !(title === "Edit" && STANDARD_EDIT.has(label)))
+    .filter(([label]) => !(title === "Edit" && isMac() && STANDARD_EDIT.has(label)))
     // These shortcuts never reach keydown, so they settle a drag here.
     .map(([label, action, shortcut]) => ({ label, action: () => { if (doc.settle()) action(); }, accelerator: nativeAccelerator(shortcut) })),
 ]))).then((native) => {

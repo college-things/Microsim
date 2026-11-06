@@ -728,7 +728,7 @@ export function createBode(host: HTMLElement, comp: SchComponent, onClose: () =>
  * `send` types bytes into the running circuit and returns why it could not, if it could not.
  */
 export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onClose: () => void, send?: (bytes: number[]) => string | undefined): InstrumentView {
-  const win = floatingWindow(host, `Serial terminal ${comp.refDes}`, 360, 280, onClose);
+  const win = floatingWindow(host, `Serial terminal ${comp.refDes}`, 380, 340, onClose);
   const screen = document.createElement("pre");
   screen.className = "serial-terminal";
   const detail = document.createElement("div");
@@ -782,8 +782,8 @@ export function createSerialTerminal(host: HTMLElement, comp: SchComponent, onCl
     event.preventDefault();
     transmit((event.clipboardData?.getData("text") ?? "").replace(/\r?\n/g, ending.value));
   });
-  typing.append(input, ending);
-  win.body.append(screen, typing, sentNote, detail, clearButton);
+  typing.append(input, ending, clearButton);
+  win.body.append(screen, typing, sentNote, detail);
   let text = "", resume = -Infinity, errors = 0, streamed = false;
   const lineState = { afterCr: false };
   // Samples not yet decoded, carried between live chunks so a frame split across two chunks is read whole.
