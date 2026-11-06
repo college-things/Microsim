@@ -4,14 +4,35 @@
     {
       "name": "ohmlet",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 5173
     },
     {
       "name": "ohmlet-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "preview", "--", "--base", "/Ohmlet/"],
+      "runtimeArgs": [
+        "run",
+        "preview",
+        "--",
+        "--base",
+        "/Ohmlet/"
+      ],
       "port": 4173
+    },
+    {
+      "name": "site",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "4180",
+        "--directory",
+        "dist-site"
+      ],
+      "port": 4180
     }
   ]
 }

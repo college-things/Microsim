@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://api.github.com; base-uri 'self'; form-action 'none'">
+  <title>Microsim: a lightweight circuit simulator</title>
+  <meta name="description" content="Draw a circuit, run it, and read it on virtual instruments. Analog, digital and 8051 microcontroller simulation for Windows, macOS, Linux and the browser. Opens Multisim .ms14 files.">
+  <meta property="og:title" content="Microsim">
+  <meta property="og:description" content="A lightweight circuit simulator for Windows, macOS, Linux and the browser.">
+  <meta property="og:image" content="img/rc-filter.png">
+  <link rel="icon" type="image/svg+xml" href="app/favicon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="./">Microsim</a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#download">Download</a>
+      <a href="#limits">Limits</a>
+      <a href="https://github.com/college-things/Microsim">GitHub</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-text">
+        <h1>Draw a circuit. Run it. Watch it work.</h1>
+        <p class="lead">Microsim is a lightweight circuit simulator. Place parts, wire them, and read the result on oscilloscopes, meters and plotters while the circuit runs. It simulates analog and digital parts and 8051 microcontrollers, and it opens Multisim <code>.ms14</code> circuits.</p>
+        <div class="actions">
+          <a class="button primary" id="primary-download" href="#download">Download</a>
+          <a class="button" href="app/">Open in your browser</a>
+        </div>
+        <p class="small">Free and open source under the MIT license. Version <span id="version">0.9 beta</span>.</p>
+      </div>
+      <figure class="shot hero-shot">
+        <img src="img/rc-filter.png" width="1440" height="880" alt="An RC low-pass filter running, with an oscilloscope showing input and output sine waves and a Bode plotter showing the roll-off above 1 kHz.">
+      </figure>
+    </section>
+
+    <section id="features" class="features">
+      <h2>What it does</h2>
+      <div class="grid">
+        <article>
+          <h3>A real circuit simulator</h3>
+          <p>A SPICE-style engine handles operating points, DC sweeps, AC, transient, noise, pole-zero, transfer function and sensitivity analyses, with diodes, transistors, op-amps and vendor SPICE models.</p>
+        </article>
+        <article>
+          <h3>Instruments that run live</h3>
+          <p>A two- and four-channel oscilloscope, multimeters, function generator, Bode plotter, wattmeter, logic analyzer and serial terminal update as the circuit runs.</p>
+        </article>
+        <article>
+          <h3>Opens Multisim files</h3>
+          <p>Open <code>.ms14</code> circuits, including NI's own samples, and save back to <code>.ms14</code>. Parts from an installed NI database can be imported.</p>
+        </article>
+        <article>
+          <h3>Microcontrollers</h3>
+          <p>An 8051 core runs your program in the circuit, with timers, interrupts and a serial port. It has a built-in assembler and reads Intel HEX, and imported NI 8051 parts run on it. Type into the serial terminal and the chip answers.</p>
+        </article>
+        <article>
+          <h3>From schematic to board</h3>
+          <p>Lay out a two-layer PCB, check it, and export Gerber, drill and KiCad files. Optional links reach C, VHDL and FPGA toolchains you install.</p>
+        </article>
+        <article>
+          <h3>An assistant that knows the circuit</h3>
+          <p>Ask the built-in assistant to explain a circuit, find a fault or build something. It uses your own Anthropic API key, which stays on your device.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="gallery">
+      <figure class="shot">
+        <img src="img/amplifier.png" width="1440" height="880" loading="lazy" alt="A common-emitter amplifier with live voltages on its wires and an oscilloscope showing the amplified output.">
+        <figcaption>A common-emitter amplifier, with live voltages on the wires.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="img/serial-echo.png" width="1440" height="880" loading="lazy" alt="An 8051 microcontroller printing lines of text into the serial terminal.">
+        <figcaption>An 8051 program printing to the serial terminal.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="img/rectifier-light.png" width="1440" height="880" loading="lazy" alt="A full-wave rectifier in the light theme, with the oscilloscope showing the rectified output.">
+        <figcaption>A full-wave rectifier, in the light theme.</figcaption>
+      </figure>
+    </section>
+
+    <section id="download" class="download">
+      <h2>Download</h2>
+      <p id="release-note" class="small">Looking up the latest release…</p>
+      <div class="platforms">
+        <article data-platform="windows">
+          <h3>Windows</h3>
+          <p class="small">Windows 10 and 11, 64-bit.</p>
+          <a class="button primary" data-asset="exe" href="https://github.com/college-things/Microsim/releases">Installer (.exe)</a>
+          <a class="link" data-asset="msi" href="https://github.com/college-things/Microsim/releases">MSI package</a>
+          <p class="note">Not yet code-signed. If Windows shows "Windows protected your PC", choose <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
+        </article>
+        <article data-platform="mac">
+          <h3>macOS</h3>
+          <p class="small">macOS 12.3 or later, Apple silicon and Intel.</p>
+          <a class="button primary" data-asset="dmg" href="https://github.com/college-things/Microsim/releases">Disk image (.dmg)</a>
+          <p class="note">Signed and notarized by Apple.</p>
+        </article>
+        <article data-platform="linux">
+          <h3>Linux</h3>
+          <p class="small">64-bit, with WebKitGTK 4.1.</p>
+          <a class="button primary" data-asset="AppImage" href="https://github.com/college-things/Microsim/releases">AppImage</a>
+          <a class="link" data-asset="deb" href="https://github.com/college-things/Microsim/releases">Debian/Ubuntu (.deb)</a>
+          <a class="link" data-asset="rpm" href="https://github.com/college-things/Microsim/releases">Fedora (.rpm)</a>
+        </article>
+        <article data-platform="web">
+          <h3>Browser</h3>
+          <p class="small">Any recent Chrome, Edge, Firefox or Safari.</p>
+          <a class="button primary" href="app/">Open Microsim</a>
+          <p class="note">Nothing to install. Circuits are simulated and kept in your browser.</p>
+        </article>
+      </div>
+      <p class="small">All files and checksums are on the <a href="https://github.com/college-things/Microsim/releases">releases page</a>.</p>
+    </section>
+
+    <section id="limits" class="limits">
+      <h2>What it isn't</h2>
+      <p>Microsim is an independent program, not a copy of Multisim. It covers what most students and hobbyists use day to day, but not everything:</p>
+      <ul>
+        <li>Its own part library is small. Parts from an installed NI database can be imported, but NI's collection is not included.</li>
+        <li>PIC microcontrollers, LCD modules and keypads from Multisim circuits don't run yet.</li>
+        <li>There is no Ultiboard compatibility, and LabVIEW <code>.vi</code> files only run through an installed LabVIEW.</li>
+        <li>Its results have not been systematically compared with Multisim's.</li>
+      </ul>
+      <p class="small">The full, current list is in <a href="https://github.com/college-things/Microsim/blob/main/docs/limits.md">docs/limits.md</a>.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>Microsim is an independent project, not affiliated with or endorsed by National Instruments or Emerson. Multisim, Ultiboard and LabVIEW are trademarks of their owners, named here only to describe compatibility.</p>
+    <p><a href="https://github.com/college-things/Microsim">Source code</a> · <a href="https://github.com/college-things/Microsim/blob/main/LICENSE">MIT license</a> · <a href="https://github.com/college-things/Microsim/issues">Report a problem</a></p>
+  </footer>
+  <script src="download.js"></script>
+</body>
+</html>

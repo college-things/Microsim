@@ -2370,6 +2370,19 @@ window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", (
 
 doc.notify();
 canvas.fit();
+// A link such as ?example=RC%20low-pass%20filter&run=1 opens an example, and can start it, so the
+// product page can link straight to working circuits. A fresh page has nothing to discard.
+{
+  const params = new URLSearchParams(location.search);
+  const wanted = params.get("example")?.trim().toLowerCase();
+  const example = wanted ? EXAMPLES.find((e) => e.name.toLowerCase() === wanted) : undefined;
+  if (example) {
+    doc.replace(buildExample(example));
+    resetAfterLoad();
+    canvas.fit();
+    if (params.get("run") === "1") void simulateRun();
+  }
+}
 void offerRecovery();
 if (!isTauri()) {
   offerLastDownload();

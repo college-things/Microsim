@@ -2,6 +2,9 @@ name: Deploy website
 
 on:
   workflow_dispatch:
+  # A published release updates the site, so its download buttons and web app match the release.
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -26,10 +29,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: npm run build:web
+      - run: npm run build:site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: dist-site
       - id: deployment
         uses: actions/deploy-pages@v4
