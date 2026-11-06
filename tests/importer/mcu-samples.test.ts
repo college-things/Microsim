@@ -38,7 +38,7 @@ describe("converting NI microcontrollers", () => {
     expect(comp.spice).toContain("d_mcu8051");
     expect(issues[0].message).toMatch(/converted to Microsim's 8051 core/);
   });
-  it("leaves PIC parts alone", () => {
+  it("leaves a PIC with unmatched 8051 pins unconverted", () => {
     const comp = fakeNiMcu();
     comp.spice = comp.spice.replace("mcs51_8052", "pic16f84");
     convertNiMcus([comp], "", []);

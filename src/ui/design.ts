@@ -12,7 +12,9 @@ import { FlowRuntime } from '../core/dataflow';
 import { dataflowEditor } from './dataflow';
 import { readIntelHex, programHex } from '../engine/ihex';
 import { assemble51 } from '../engine/asm51';
-import { isMcu8051 } from '../importer/mcu';
+import { assemblePic } from '../engine/asmpic';
+import { picWords, type PicVariant } from '../engine/pic16';
+import { isMcu, isMcuPic, isMcu8051 } from '../importer/mcu';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text = "") => { const n = document.createElement(tag); n.textContent = text; return n; };
 const button = (text: string, action: () => void) => { const b = el("button", text); b.type = "button"; b.onclick = action; return b; };
@@ -212,23 +214,23 @@ export class DesignUI {
       box.append(output, downloads, actions);
     }, () => abort?.abort());
   }
-  /** Loads assembly source or Intel HEX into a built-in or converted NI 8051, with no external tools. */
+  /** Loads source or Intel HEX into a supported MCU, with no external tools. */
   mcuProgram() {
     this.dialog("Microcontroller program", (box, close) => {
       box.classList.add("design-dialog");
-      const parts = this.doc.schematic.components.filter(isMcu8051);
+      const parts = this.doc.schematic.components.filter(isMcu);
       if (!parts.length) {
-        box.append(el("p", "This circuit has no 8051 microcontroller. Place an 8051 firmware core from the Digital palette, or open a Multisim circuit that has an 8051 or 8052."));
+        box.append(el("p", "This circuit has no microcontroller. Place an 8051 or PIC16 firmware core from the Digital palette, or open a circuit with a supported NI MCU."));
         const actions = el("div"); actions.className = "dialog-actions"; actions.append(button("Close", close)); box.append(actions);
         return;
       }
-      box.append(el("p", "Assemble classic Intel-syntax 8051 source (as written for Multisim's MCU workspaces) or load an Intel HEX file. Assembly runs here, with no other software. Generic JMP and CALL assemble as LJMP and LCALL, which take the same time as the short forms."));
+      box.append(el("p", "Assemble Intel-syntax 8051 or MPASM-style PIC16 source, or load Intel HEX. Assembly runs here with no other software. PIC addresses count words; HEX addresses count bytes."));
       const config = el("div"); config.className = "design-controls";
       const target = el("select"); target.setAttribute("aria-label", "Microcontroller");
-      for (const comp of parts) { const option = el("option", `${comp.refDes}${comp.params.mcu === "8051" ? " (imported NI part)" : ""}`); option.value = comp.id; target.append(option); }
+      for (const comp of parts) { const option = el("option", `${comp.refDes}${comp.params.mcu ? " (imported NI part)" : ""}`); option.value = comp.id; target.append(option); }
       config.append(target);
       const expected = el("p"); expected.className = "muted";
-      const source = el("textarea"); source.className = "design-source"; source.setAttribute("aria-label", "8051 assembly source");
+      const source = el("textarea"); source.className = "design-source"; source.setAttribute("aria-label", "Microcontroller assembly source");
       const output = el("pre"); output.className = "design-status";
       const current = () => this.doc.schematic.components.find((c) => c.id === target.value);
       const describe = () => {
@@ -241,18 +243,24 @@ export class DesignUI {
         output.textContent = bytes ? `${comp.refDes} holds a ${bytes}-byte program.` : `${comp.refDes} has no program yet.`;
       };
       target.onchange = describe;
-      const load = (code: Uint8Array, asm: string | undefined, note: string) => {
+      const load = (code: Uint8Array, asm: string | undefined, note: string, config?: number) => {
         const comp = current();
         if (!comp) throw new Error("The microcontroller was removed.");
-        let end = code.length; while (end > 1 && code[end - 1] === 255) end--;
+        const pic=isMcuPic(comp),variant=(comp.params.variant??comp.kind) as PicVariant;
+        if(pic)picWords(code,variant);
+        let end = pic?Math.min(code.length,variant==='pic16f84a'?2048:16384):code.length;
+        if(pic){while(end>2&&code[end-1]===255&&code[end-2]===255)end-=2;}
+        else while(end>1&&code[end-1]===255)end--;
         this.doc.checkpoint();
         comp.params.code = programHex(code.slice(0, end));
+        if(pic){const word=code.length>0x400f?(code[0x400e]|(code[0x400f]<<8)):0xffff;comp.params.config=String(config??(asm===undefined&&word!==0xffff?word&0x3fff:-1));}
         if (asm === undefined) delete comp.params.asm; else comp.params.asm = asm;
         this.doc.notify();
         output.textContent = `${note} ${end} bytes loaded into ${comp.refDes}. Run the circuit to execute it.`;
       };
       const assemble = () => {
-        try { const result = assemble51(source.value); load(result.code, source.value, `Assembled ${result.listing.length} instructions.`); }
+        try { const comp=current(); const result = comp&&isMcuPic(comp)?assemblePic(source.value,(comp.params.variant??comp.kind) as PicVariant):assemble51(source.value);
+          load(result.code, source.value, "Program assembled.", "config" in result&&typeof result.config==="number"?result.config:undefined); }
         catch (e) { output.textContent = `Not loaded. ${e instanceof Error ? e.message : String(e)}`; }
       };
       const actions = el("div"); actions.className = "dialog-actions";
