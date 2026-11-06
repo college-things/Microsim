@@ -4,6 +4,7 @@ import { PART_BY_KIND } from "../core/library";
 import { junctions, pinWorld, placedBounds, pointKey, shownValue, symbolBounds, symbolGraphics } from "../core/netlist";
 import type { PartDisplay } from "../core/indicators";
 import type { Point, SchComponent, Wire } from "../core/schematic";
+import { blockSymbol } from "../core/hierarchy";
 import { isMac } from "./platform";
 
 const GRID = 10;
@@ -120,7 +121,7 @@ export class SchematicCanvas {
     new ResizeObserver(() => this.invalidate()).observe(this.el);
     doc.subscribe(() => {
       if (this.selection.size) {
-        const s = this.doc.schematic;
+        const s = this.doc.sheet;
         const ids = new Set([...s.components, ...s.wires, ...s.labels, ...s.texts].map((item) => item.id));
         for (const id of [...this.selection]) if (!ids.has(id)) this.selection.delete(id);
       }
@@ -180,6 +181,8 @@ export class SchematicCanvas {
   }
 
   beginPlace(kind: string): void {
+    const part = PART_BY_KIND.get(kind);
+    if (this.doc.blockPath.length && (part?.instrument || part?.indicator || kind === "lcd16x2")) { this.refuse("Place instruments and result displays on a circuit page, outside blocks."); return; }
     this.placing = kind;
     this.placingTurn = { rotation: 0, mirrored: false };
     this.annotating = undefined;
@@ -192,6 +195,8 @@ export class SchematicCanvas {
   }
 
   placeAtCenter(kind: string): void {
+    const part = PART_BY_KIND.get(kind);
+    if (this.doc.blockPath.length && (part?.instrument || part?.indicator || kind === "lcd16x2")) { this.refuse("Place instruments and result displays on a circuit page, outside blocks."); return; }
     const x = snap((this.el.clientWidth / 2 - this.ox) / this.zoom);
     const y = snap((this.el.clientHeight / 2 - this.oy) / this.zoom);
     this.doc.checkpoint();
@@ -209,7 +214,7 @@ export class SchematicCanvas {
   /** What the status bar says when there's nothing to report: the tool in hand, if any. */
   private toolHint(): string {
     if (this.draft) return WIRING;
-    if (this.placing) return `Placing ${PART_BY_KIND.get(this.placing)?.name}. Click to drop, R to turn, Esc to finish.`;
+    if (this.placing) return `Placing ${PART_BY_KIND.get(this.placing)?.name ?? this.doc.schematic.blocks?.find((b) => `block:${b.id}` === this.placing)?.name ?? "block"}. Click to drop, R to turn, Esc to finish.`;
     if (this.annotating) return this.annotating.kind === "label" ? `Click a wire to name its net "${this.annotating.value}".` : "Click to place the note.";
     return "";
   }
@@ -224,7 +229,7 @@ export class SchematicCanvas {
   }
 
   private contentBounds(): { x0: number; y0: number; x1: number; y1: number } | undefined {
-    const items = this.doc.schematic;
+    const items = this.doc.sheet;
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const c of items.components) {
       const b = this.worldBounds(c);
@@ -302,7 +307,7 @@ export class SchematicCanvas {
 
   private transformSelected(what: string, apply: (c: SchComponent) => void): void {
     if (!this.doc.settle()) return;
-    const comps = this.doc.schematic.components.filter((c) => this.selection.has(c.id));
+    const comps = this.doc.sheet.components.filter((c) => this.selection.has(c.id));
     if (!comps.length) return;
     this.doc.checkpoint();
     if (this.doc.transformParts(comps, apply)) {
@@ -326,7 +331,7 @@ export class SchematicCanvas {
   }
 
   private onlyWiresSelected(): boolean {
-    return this.doc.schematic.wires.filter((w) => this.selection.has(w.id)).length === this.selection.size;
+    return this.doc.sheet.wires.filter((w) => this.selection.has(w.id)).length === this.selection.size;
   }
 
   deleteSelected(): void {
@@ -344,13 +349,13 @@ export class SchematicCanvas {
 
   selectAll(): void {
     if (!this.doc.settle()) return;
-    const s = this.doc.schematic;
+    const s = this.doc.sheet;
     this.select([...s.components, ...s.wires, ...s.labels, ...s.texts].map((item) => item.id));
   }
 
   copySelected(): void {
     if (!this.doc.settle()) return;
-    const s = this.doc.schematic;
+    const s = this.doc.sheet;
     const picked = s.components.filter((c) => this.selection.has(c.id));
     // SPICE stored as fixed text names its own devices and nets, so a second copy would
     // clash with the first or silently join to it.
@@ -419,7 +424,7 @@ export class SchematicCanvas {
     const reach = 9 / this.zoom;
     let best: Point | undefined;
     let bestDistance = Infinity;
-    for (const comp of this.doc.schematic.components) {
+    for (const comp of this.doc.sheet.components) {
       for (const pin of comp.pins) {
         const at = pinWorld(comp, pin);
         const distance = Math.max(Math.abs(at.x - p.x), Math.abs(at.y - p.y));
@@ -433,7 +438,7 @@ export class SchematicCanvas {
   }
 
   private pinIsAt(p: Point): boolean {
-    return this.doc.schematic.components.some((c) => c.pins.some((pin) => pointKey(pinWorld(c, pin)) === pointKey(p)));
+    return this.doc.sheet.components.some((c) => c.pins.some((pin) => pointKey(pinWorld(c, pin)) === pointKey(p)));
   }
 
   /** Position in CSS pixels relative to the page. */
@@ -444,7 +449,7 @@ export class SchematicCanvas {
 
   private wireAt(p: Point): Wire | undefined {
     const reach = 5 / this.zoom;
-    for (const wire of this.doc.schematic.wires) {
+    for (const wire of this.doc.sheet.wires) {
       for (let i = 1; i < wire.points.length; i++) {
         const a = wire.points[i - 1];
         const b = wire.points[i];
@@ -460,7 +465,7 @@ export class SchematicCanvas {
   }
 
   private nearestWirePoint(p: Point): Point | undefined {
-    return pointOnWires(this.doc.schematic.wires, p, 5 / this.zoom);
+    return pointOnWires(this.doc.sheet.wires, p, 5 / this.zoom);
   }
 
   /** What a click would land on when ending a wire or label. Zoomed far out a pin reaches well past a wire, so the nearer wins. */
@@ -472,7 +477,7 @@ export class SchematicCanvas {
   }
 
   private annotationAt(p: Point): string | undefined {
-    const s = this.doc.schematic;
+    const s = this.doc.sheet;
     const hit = (x: number, y: number, width: number) => p.x >= x - 4 && p.x <= x + width && p.y >= y - 14 && p.y <= y + 8;
     const label = s.labels.find((l) => !l.hidden && hit(l.x, l.y, 8 + l.net.length * 6));
     if (label) return label.id;
@@ -482,11 +487,11 @@ export class SchematicCanvas {
   /** A net's name whose dot is here. The dot sits on the name's wire, so this comes before the wire. */
   private nameDotAt(p: Point): string | undefined {
     const reach = 5 / this.zoom;
-    return this.doc.schematic.labels.find((l) => !l.hidden && Math.hypot(l.x - p.x, l.y - p.y) <= reach)?.id;
+    return this.doc.sheet.labels.find((l) => !l.hidden && Math.hypot(l.x - p.x, l.y - p.y) <= reach)?.id;
   }
 
   private componentAt(p: Point): SchComponent | undefined {
-    const list = this.doc.schematic.components;
+    const list = this.doc.sheet.components;
     for (let i = list.length - 1; i >= 0; i--) {
       const b = this.worldBounds(list[i]);
       if (p.x >= b.x0 - 2 && p.x <= b.x1 + 2 && p.y >= b.y0 - 2 && p.y <= b.y1 + 2) return list[i];
@@ -530,16 +535,22 @@ export class SchematicCanvas {
       this.onStatus("");
       this.doc.checkpoint();
       if (at) {
-        this.doc.schematic.labels.push({ id: newId("l"), x: at.x, y: at.y, net: value });
+        this.doc.sheet.labels.push({ id: newId("l"), x: at.x, y: at.y, net: value });
       } else {
-        this.doc.schematic.texts.push({ id: newId("t"), x: snap(p.x), y: snap(p.y), text: value });
+        this.doc.sheet.texts.push({ id: newId("t"), x: snap(p.x), y: snap(p.y), text: value });
       }
       this.doc.notify();
       return;
     }
     if (this.placing) {
-      this.doc.checkpoint();
-      const comp = this.doc.addPart(this.placing, snap(p.x), snap(p.y));
+      let comp: SchComponent;
+      if (this.placing.startsWith("block:")) {
+        try { comp = this.doc.placeBlock(this.placing.slice(6), snap(p.x), snap(p.y)); }
+        catch (error) { this.refuse(error instanceof Error ? error.message : String(error)); return; }
+      } else {
+        this.doc.checkpoint();
+        comp = this.doc.addPart(this.placing, snap(p.x), snap(p.y));
+      }
       Object.assign(comp, this.placingTurn);
       this.select([comp.id]);
       this.doc.notify();
@@ -639,7 +650,7 @@ export class SchematicCanvas {
         return;
       }
       this.doc.checkpoint();
-      const comps = this.doc.schematic.components.filter((c) => this.selection.has(c.id));
+      const comps = this.doc.sheet.components.filter((c) => this.selection.has(c.id));
       drag.move = new PartMove(this.doc, comps, this.selection);
       this.doc.hold(() => this.finishMove(drag));
     }
@@ -655,7 +666,7 @@ export class SchematicCanvas {
       return true;
     }
     // A net's name dropped near its wire lands on the wire.
-    const name = this.selection.size === 1 ? this.doc.schematic.labels.find((l) => this.selection.has(l.id)) : undefined;
+    const name = this.selection.size === 1 ? this.doc.sheet.labels.find((l) => this.selection.has(l.id)) : undefined;
     if (name) Object.assign(name, this.landingAt(name));
     if (!drag.move!.settle()) {
       this.doc.revert();
@@ -706,12 +717,12 @@ export class SchematicCanvas {
       const { a, b } = this.box;
       const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
       if (x1 - x0 > 2 || y1 - y0 > 2) {
-        const ids = this.doc.schematic.components.filter((c) => {
+        const ids = this.doc.sheet.components.filter((c) => {
           const box = this.worldBounds(c);
           return box.x0 >= x0 && box.x1 <= x1 && box.y0 >= y0 && box.y1 <= y1;
         }).map((c) => c.id);
         const inside = (p: Point) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
-        const s = this.doc.schematic;
+        const s = this.doc.sheet;
         const wires = s.wires.filter((w) => w.points.every(inside));
         const notes = [...s.labels.filter((l) => !l.hidden), ...s.texts].filter(inside);
         this.select([...(drag.adding ? this.selection : []), ...ids, ...wires.map((w) => w.id), ...notes.map((n) => n.id)]);
@@ -796,18 +807,18 @@ export class SchematicCanvas {
     };
 
     ctx.lineWidth = 1.3;
-    for (const wire of this.doc.schematic.wires) {
+    for (const wire of this.doc.sheet.wires) {
       ctx.strokeStyle = this.selection.has(wire.id) ? accent : wireColor;
       ctx.beginPath();
       wire.points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
       ctx.stroke();
     }
     ctx.fillStyle = wireColor;
-    for (const { x, y } of junctions(this.doc.schematic)) {
+    for (const { x, y } of junctions(this.doc.sheet)) {
       ctx.beginPath(); ctx.arc(x, y, 2.6, 0, 7); ctx.fill();
     }
 
-    for (const comp of this.doc.schematic.components) {
+    for (const comp of this.doc.sheet.components) {
       const b = this.worldBounds(comp);
       if (b.x1 < view.x0 - 40 || b.x0 > view.x1 + 40 || b.y1 < view.y0 - 40 || b.y0 > view.y1 + 40) continue;
       const selected = this.selection.has(comp.id);
@@ -831,20 +842,20 @@ export class SchematicCanvas {
     ctx.font = "10px -apple-system, 'Segoe UI', sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    for (const label of this.doc.schematic.labels) {
+    for (const label of this.doc.sheet.labels) {
       if (label.hidden) continue;
       ctx.fillStyle = accent;
       ctx.fillText(label.net, label.x + 4, label.y - 7);
       ctx.beginPath(); ctx.arc(label.x, label.y, 2, 0, 7); ctx.fill();
       if (this.selection.has(label.id)) ctx.strokeRect(label.x - 3, label.y - 14, label.net.length * 6 + 10, 17);
     }
-    for (const note of this.doc.schematic.texts) {
+    for (const note of this.doc.sheet.texts) {
       ctx.fillStyle = this.selection.has(note.id) ? accent : textColor;
       note.text.split("\n").forEach((row, i) => ctx.fillText(row, note.x, note.y + i * 12));
     }
 
     if (this.probes.size) {
-      for (const comp of this.doc.schematic.components) {
+      for (const comp of this.doc.sheet.components) {
         for (const pin of comp.pins) {
           const value = this.probes.get(`${comp.id}/${pin.name}`);
           if (value === undefined) continue;
@@ -876,6 +887,12 @@ export class SchematicCanvas {
     }
     if (this.placing) {
       const part = PART_BY_KIND.get(this.placing);
+      const block = this.doc.schematic.blocks?.find((b) => `block:${b.id}` === this.placing);
+      if (block) {
+        ctx.globalAlpha = 0.55;
+        this.drawComponent(ctx, { ...blockSymbol(block, "", "", snap(this.mouse.x), snap(this.mouse.y)), ...this.placingTurn }, accent);
+        ctx.globalAlpha = 1;
+      }
       if (part) {
         ctx.globalAlpha = 0.55;
         this.drawComponent(ctx, {
