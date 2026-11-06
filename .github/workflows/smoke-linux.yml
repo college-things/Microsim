@@ -39,7 +39,7 @@ jobs:
           dbus-run-session -- microsim > launch.log 2>&1 &
           pid=$!
           sleep 15
-          # GTK can create an unmapped toplevel on the virtual display. Map it explicitly.
+          # Keep diagnostics, and require the application window to have appeared.
           xwininfo -root -tree >> launch.log
           # Match the actual titled application window, not GTK's lowercase InputOnly leader.
           win=$(xdotool search --onlyvisible --name '^Microsim$' | head -1)
@@ -54,7 +54,7 @@ jobs:
           # The window title is Microsim; drive its menus with the keyboard-free xdotool search.
           echo "window: $win" >> launch.log
           kill -0 "$pid"
-          # Open the Examples menu by clicking its position in the native menu bar, then the first example.
+          # Open the first example through the native menu bar.
           if [ -n "$win" ]; then
             xdotool windowactivate --sync "$win" || true
             # File is the first native menu, Examples the second. F10 avoids title-bar offsets.
@@ -69,7 +69,12 @@ jobs:
           cat launched.txt running.txt >> launch.log
           # A living process or an empty desktop is insufficient evidence of a working app.
           grep -Eiq 'Microsim|Examples|Simulate|resistor' launched.txt
-          grep -Eiq 'RC low.pass|low.pass filter' running.txt
+          # The document name is in the window decoration, outside the client capture.
+          # These panels and their settled RMS readings verify the loaded RC example and run.
+          grep -Eiq 'Oscilloscope' running.txt
+          grep -Eiq 'Bode plotter' running.txt
+          grep -Eq '707[.,][0-9].*rms' running.txt
+          grep -Eq '(499|500)[.,][0-9].*rms' running.txt
           kill -0 "$pid"
           kill "$pid"
           cat launch.log
