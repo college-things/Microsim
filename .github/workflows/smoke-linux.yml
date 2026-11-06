@@ -19,34 +19,65 @@ jobs:
         with:
           workspaces: src-tauri
       - name: Build dependencies and a virtual display
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb imagemagick xdotool
+          # The runner's regional HTTP mirror can stall on large WebKit packages.
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb imagemagick xdotool fluxbox tesseract-ocr x11-utils dbus-x11
       - run: npm ci
       - run: npx tauri build --bundles deb
       - name: Launch, open an example and run it
+        timeout-minutes: 3
         run: |
           sudo dpkg -i src-tauri/target/release/bundle/deb/*.deb || sudo apt-get -f install -y
           export DISPLAY=:99
+          # A virtual display has no GPU: WebKitGTK must render in software or it paints nothing.
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 LIBGL_ALWAYS_SOFTWARE=1 GDK_BACKEND=x11 NO_AT_BRIDGE=1
           Xvfb :99 -screen 0 1440x900x24 &
           sleep 3
-          microsim > launch.log 2>&1 &
+          # Without a window manager the app's window is never mapped, and nothing can be captured.
+          fluxbox > /dev/null 2>&1 &
+          sleep 2
+          dbus-run-session -- microsim > launch.log 2>&1 &
           pid=$!
           sleep 15
-          import -window root launched.png
+          # Keep diagnostics, and require the application window to have appeared.
+          xwininfo -root -tree >> launch.log
+          # Match the actual titled application window, not GTK's lowercase InputOnly leader.
+          win=$(xdotool search --onlyvisible --name '^Microsim$' | head -1)
+          test -n "$win"
+          xdotool windowmap --sync "$win"
+          xdotool windowsize "$win" 1320 840 windowmove "$win" 20 20
+          xdotool windowactivate --sync "$win" windowraise "$win"
+          xwininfo -id "$win" >> launch.log
+          sleep 3
+          # Capture the client window itself. Root captures can omit child windows on Xvfb.
+          import -window "$win" launched.png
           # The window title is Microsim; drive its menus with the keyboard-free xdotool search.
-          win=$(xdotool search --name '^Microsim$' | head -1)
           echo "window: $win" >> launch.log
           kill -0 "$pid"
-          # Open the Examples menu by clicking its position in the native menu bar, then the first example.
+          # Open the first example through the native menu bar.
           if [ -n "$win" ]; then
             xdotool windowactivate --sync "$win" || true
-            xdotool mousemove --window "$win" 150 15 click 1 && sleep 1
-            import -window root menu.png
-            xdotool key Down Return && sleep 3
+            # File is the first native menu, Examples the second. F10 avoids title-bar offsets.
+            xdotool key F10 Right Down && sleep 1
+            import -screen -window root menu.png
+            xdotool key Return && sleep 3
             xdotool key F5 && sleep 10
           fi
-          import -window root running.png
+          import -window "$win" running.png
+          tesseract launched.png launched 2>/dev/null
+          tesseract running.png running 2>/dev/null
+          cat launched.txt running.txt >> launch.log
+          # A living process or an empty desktop is insufficient evidence of a working app.
+          grep -Eiq 'Microsim|Examples|Simulate|resistor' launched.txt
+          # Scope controls and settled RMS readings verify the loaded RC example and run.
+          # OCR can omit the bold scope heading when it segments the surrounding schematic.
+          grep -Eiq 'Time.?div' running.txt
+          grep -Eiq 'Bode plotter' running.txt
+          grep -Eq '707[.,][0-9].*rms' running.txt
+          grep -Eq '(499|500)[.,][0-9].*rms' running.txt
           kill -0 "$pid"
           kill "$pid"
           cat launch.log
@@ -57,3 +88,4 @@ jobs:
           path: |
             *.png
             launch.log
+            *.txt
