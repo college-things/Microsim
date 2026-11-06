@@ -263,7 +263,10 @@ export function buildXspice(h: XHost, ports: XPort[], m: XModel): boolean {
       c.deferred.push(()=>{
         const d=domain(c),clock=d.internalNet(),echo=d.addDriver(clock,2);
         const lows=pins.map(n=>d.outputDriver(c,n)),highs=pins.map((n,i)=>i<8?-1:d.outputDriver(c,n,true));
-        d.addModel(new Mcu8051(clock,echo,d.inputNet(c,reset),pins.map(n=>d.inputNet(c,n)),lows,highs,12/frequency,code,d));
+        const mcu=new Mcu8051(clock,echo,d.inputNet(c,reset),pins.map(n=>d.inputNet(c,n)),lows,highs,12/frequency,code,d);
+        const name=h.name.toLowerCase();
+        mcu.onHalt=()=>{c.haltRequested=name;};
+        d.addModel(mcu);c.mcus.set(name,mcu);
       });
       return true;
     }

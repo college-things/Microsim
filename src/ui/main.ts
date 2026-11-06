@@ -15,6 +15,8 @@ import { buildExample, EXAMPLES, type Example } from "../core/examples";
 import { resultToCsv, runsToCsv, schematicToSvg } from "../core/export";
 import { truthTable } from "../core/logic";
 import { CharacterLcd } from "../core/lcd";
+import { createDebugger, type DebugCommand, type DebuggerView } from "./debugger";
+import { isMcu8051 } from "../importer/mcu";
 import { ivCurves, type IvMode } from "../core/ivcurves";
 import { billOfMaterials, bomToCsv, bomToHtml, electricalRulesCheck, kicadNetlist } from "../core/reports";
 import { indicatorParts, indicatorVectors, readIndicator } from "../core/indicators";
@@ -663,6 +665,7 @@ function appendKeypad(wrap: HTMLElement, comp: SchComponent): void {
 
 function appendInteractive(wrap: HTMLElement, comp: SchComponent): void {
   if (comp.kind === "keypad4x4") { appendKeypad(wrap, comp); return; }
+  if (isMcu8051(comp)) wrap.append(el("button", { textContent: "Debug program", onclick: () => openDebugger(comp) }));
   const spec = comp.interactive;
   if (spec?.kind === "switch") {
     const hint = spec.key ? ` (key ${spec.key})` : "";
@@ -1020,9 +1023,37 @@ function liveRate(instruments: SchComponent[], netlist: string): number | undefi
   return 1;
 }
 
+// The open debugger, if any. It talks to the live run through the microcontroller's netlist name.
+let debugView: DebuggerView | undefined;
+
+function debugDevice(compId: string): string | undefined {
+  const ref = lastRun?.refs.get(compId);
+  return ref ? `a${ref}` : undefined;
+}
+
+/** Sends a debugger command to the running circuit; false when nothing is running with that part in it. */
+function sendDebug(compId: string, command: DebugCommand): boolean {
+  const device = debugDevice(compId);
+  if (!live || !device) return false;
+  live.debug({ device, ...command });
+  return true;
+}
+
+function openDebugger(comp: SchComponent): void {
+  if (debugView) { debugView.element.remove(); debugView = undefined; }
+  const id = comp.id;
+  const view = createDebugger(sheetHost, comp, (command) => sendDebug(id, command), () => {
+    sendDebug(id, { watch: false, breakpoints: [] });
+    if (debugView === view) debugView = undefined;
+  });
+  debugView = view;
+  if (!sendDebug(id, { watch: true })) view.idle("Run the circuit to debug its program. Breakpoints set now apply when it starts.");
+}
+
 function stopLive(): void {
   live?.stop();
   live = undefined;
+  debugView?.idle("The run has stopped. Run it again to keep debugging.");
   if (liveFrame) cancelAnimationFrame(liveFrame);
   liveFrame = 0;
 }
@@ -1121,12 +1152,19 @@ function startLive(run: RunData, netlist: string, instruments: SchComponent[], s
     onReady(kept, warnings) {
       names = kept;
       buffer = new LiveBuffer(kept);
+      // A debugger already open picks up the new run, with its breakpoints.
+      if (debugView && !sendDebug(debugView.compId, { watch: true, breakpoints: debugView.breakpoints() })) debugView.idle("This part isn't in the running circuit.");
       const before = log.length;
       logWarnings(warnings);
       if (log.length > before) sheetTabs.show("Results");
     },
-    onChunk(time, values, reached) {
+    onChunk(time, values, reached, debug) {
       buffer?.append(time, values);
+      if (debugView && debug?.mcu) {
+        const halted = !!debug.halted && debug.halted === debugDevice(debugView.compId)?.toLowerCase();
+        debugView.update(debug.mcu, halted);
+        if (debug.halted) runState.textContent = `Paused by the debugger at t = ${formatSI(reached, "s")}`;
+      }
       if (lcds.size) feedLcds(run, time, (name) => values[names.indexOf(name.toLowerCase())]);
       // Decoders such as the serial terminal see every sample, however late the next redraw is.
       for (const view of views.values()) view.stream?.(run, time, (name) => values[names.indexOf(name.toLowerCase())]);

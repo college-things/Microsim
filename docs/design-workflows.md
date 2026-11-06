@@ -14,7 +14,7 @@ The implementation target is independent functionality across the entire request
 | VHDL / FPGA | GHDL and Yosys/nextpnr/iCE40 toolchains | More device families, hardware programming, analog/HDL coupling |
 | Agilent / Tektronix panels | Original simulated meter and four-channel scope controls | Exact hardware behavior, complete panels and SCPI |
 | Component database | Built-in original library and portable user catalogue | NI's collection is not bundled; optional import needs an existing database |
-| C compiler | SDCC compilation, Intel HEX import and independent 8051 circuit execution | NI PIC parts, debugger and electrical chip behavior |
+| C compiler | SDCC compilation, Intel HEX import and independent 8051 circuit execution | NI PIC parts and electrical chip behavior |
 | Tank / conveyor | Original process models with animated state and sensors | Original NI scripts, falling objects and exact sample behavior |
 
 The independent implementations do not use the NI license manager. Importing an installed NI database and executing a native VI are optional external-product adapters. The latter still requires LabVIEW. Native Multisim is used for interoperability validation, not to generate new files in the running app. Separately installed open-source build tools retain their own licenses.
