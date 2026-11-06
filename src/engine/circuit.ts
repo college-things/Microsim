@@ -1,3 +1,4 @@
+import type { Mcu8051 } from './mcu-digital';
 import type { UartTx } from './uart-tx';
 // Shared simulation state read and written by device models.
 
@@ -101,6 +102,10 @@ export class Circuit {
   readonly named = new Map<string, Device>();
   /** Serial inputs a live run can type into, by lower-case instance name. */
   readonly serialInputs = new Map<string, UartTx>();
+  /** Microcontrollers a debugger can reach, by lower-case instance name. */
+  readonly mcus = new Map<string, Mcu8051>();
+  /** Set by a microcontroller that has stopped for its debugger; a live run halts until it is cleared. */
+  haltRequested: string | undefined;
   readonly warnings: string[] = [];
   private readonly warned = new Set<string>();
 

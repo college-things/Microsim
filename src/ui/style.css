@@ -263,3 +263,13 @@ pre { margin: 0; padding: 8px 10px; font: 12px/1.45 ui-monospace, Menlo, Consola
 
 .keypad-grid { display: grid; grid-template-columns: repeat(4, 40px); gap: 6px; margin: 6px 0; }
 .keypad-grid button { height: 36px; font: 600 15px ui-monospace, Consolas, monospace; touch-action: none; }
+
+.debugger { display: flex; flex-direction: column; min-height: 0; }
+.debugger-bar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.debugger-registers { margin: 0 0 6px; font: 12px/1.4 ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+.debugger-listing { flex: 1; min-height: 120px; overflow: auto; font: 12px/1.45 ui-monospace, Consolas, monospace; white-space: pre; border: 1px solid #8884; border-radius: 4px; }
+.debugger-line { padding: 0 6px; }
+.debugger-line.code { cursor: pointer; }
+.debugger-line.code:hover { background: #8882; }
+.debugger-line.breakpoint { box-shadow: inset 4px 0 0 #e03131; background: #e0313122; }
+.debugger-line.current { background: #f2c94c55; }

@@ -141,6 +141,29 @@ export interface LiveSession {
   update(netlist: string): boolean;
   /** Queues bytes on a serial input (a d_uart_tx instance, by name). Returns false when there is none. */
   send(device: string, bytes: number[]): boolean;
+  /** Sets a microcontroller's breakpoints, or asks it to stop after its next instruction. False when there is no such device. */
+  debug(device: string, command: { breakpoints?: number[]; step?: boolean }): boolean;
+  /** The device that has stopped for its debugger, if any. advance() makes no progress until resume(). */
+  readonly halted: string | undefined;
+  resume(): void;
+  /** A microcontroller's registers and ports, for a debugger. */
+  mcuState(device: string): McuState | undefined;
+}
+
+export interface McuState {
+  pc: number;
+  a: number;
+  b: number;
+  psw: number;
+  sp: number;
+  dptr: number;
+  /** R0-R7 of the selected bank. */
+  registers: number[];
+  /** Port latches P0-P3. */
+  ports: number[];
+  cycles: number;
+  /** Simulated time, in seconds. */
+  time: number;
 }
 
 export class SimError extends Error {

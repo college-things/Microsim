@@ -1425,6 +1425,8 @@ export class Analysis {
         c.warn(`Stopped at t = ${t}; results are partial`);
         break;
       }
+      // A microcontroller hit a breakpoint or finished a single step: the chunk ends here.
+      if (c.haltRequested) break;
       // The budget is read between steps. A call always makes progress unless it is stuck in retries.
       if ((accepted > 0 || ++attempts > 256) && deadline < Infinity && now() > deadline) break;
       const eps = Math.max(run.epsBase, t * 1e-13);

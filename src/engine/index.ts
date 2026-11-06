@@ -39,6 +39,8 @@ export function createLiveSession(netlist: string, options: { tmax?: number; uic
     const run = analysis.startLive(options.tmax, options.uic === true);
     let first = true;
     const names = analysis.outputNames();
+    // Breakpoints outlive a value change, which builds a new circuit.
+    const breakpoints = new Map<string, number[]>();
     return {
       names,
       get warnings(): string[] {
@@ -52,8 +54,10 @@ export function createLiveSession(netlist: string, options: { tmax?: number; uic
           const nextAnalysis = new Analysis(next, {});
           nextAnalysis.resumeFrom(analysis, run);
           for (const w of circuit.warnings) next.warn(w);
+          next.haltRequested = circuit.haltRequested;
           circuit = next;
           analysis = nextAnalysis;
+          for (const [name, addresses] of breakpoints) for (const address of addresses) circuit.mcus.get(name)?.breakpoints.add(address);
           return true;
         } catch (e) {
           // A netlist that cannot be read goes back to the caller, whose restart reports it properly.
@@ -64,6 +68,34 @@ export function createLiveSession(netlist: string, options: { tmax?: number; uic
       get time(): number {
         return analysis.liveTime(run);
       },
+      debug(device: string, command: { breakpoints?: number[]; step?: boolean }): boolean {
+        const name = device.toLowerCase();
+        const mcu = circuit.mcus.get(name);
+        if (!mcu) return false;
+        if (command.breakpoints) {
+          breakpoints.set(name, [...command.breakpoints]);
+          mcu.breakpoints.clear();
+          for (const address of command.breakpoints) mcu.breakpoints.add(address & 0xffff);
+        }
+        if (command.step) mcu.stepOnce = true;
+        return true;
+      },
+      get halted(): string | undefined {
+        return circuit.haltRequested;
+      },
+      resume(): void {
+        circuit.haltRequested = undefined;
+      },
+      mcuState(device: string) {
+        const cpu = circuit.mcus.get(device.toLowerCase())?.cpu;
+        if (!cpu) return undefined;
+        const bank = cpu.psw & 0x18;
+        return {
+          pc: cpu.pc, a: cpu.a, b: cpu.read(0xf0), psw: cpu.psw, sp: cpu.read(0x81), dptr: (cpu.read(0x83) << 8) | cpu.read(0x82),
+          registers: Array.from(cpu.ram.subarray(bank, bank + 8)), ports: [0, 1, 2, 3].map((port) => cpu.latch(port)),
+          cycles: cpu.cycles, time: analysis.liveTime(run),
+        };
+      },
       send(device: string, bytes: number[]): boolean {
         const input = circuit.serialInputs.get(device.toLowerCase());
         if (!input) return false;
@@ -71,6 +103,8 @@ export function createLiveSession(netlist: string, options: { tmax?: number; uic
         return true;
       },
       advance(untilTime: number, budgetMs: number): LiveChunk {
+        // Stopped for a debugger: nothing moves until resume().
+        if (circuit.haltRequested) return { time: new Float64Array(0), values: names.map(() => new Float64Array(0)) };
         if (!(untilTime >= 0) || !Number.isFinite(untilTime)) {
           throw new SimError("Live session time must be finite and not negative", "parse");
         }

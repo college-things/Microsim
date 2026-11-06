@@ -7,6 +7,12 @@ export class Mcu8051 implements DigitalModel {
   readonly cpu:Mcs51;
   readonly stateKey:string;
   private armed=false;
+  /** Program addresses to stop before executing. */
+  readonly breakpoints=new Set<number>();
+  /** Stop after the next instruction. */
+  stepOnce=false;
+  /** Called when the program reaches a breakpoint or completes a single step. */
+  onHalt?:()=>void;
   constructor(private readonly clock:number,private readonly echo:number,private readonly resetNet:number,pins:number[],private readonly lows:number[],private readonly highs:number[],private readonly period:number,code:Uint8Array,domain:DigitalDomain){
     this.inputs=[clock,resetNet];
     this.stateKey=period+':'+Array.from(code,b=>b.toString(16).padStart(2,'0')).join('');
@@ -30,6 +36,7 @@ export class Mcu8051 implements DigitalModel {
     if(this.armed&&trig===this.resetNet)return;
     this.armed=true;
     const cycles=reset?1:this.cpu.step();
+    if(!reset&&(this.stepOnce||this.breakpoints.has(this.cpu.pc))){this.stepOnce=false;this.onHalt?.();}
     d.schedule(this.echo,d.val(this.clock)===L1?L0:L1,cycles*this.period);
   }
 }

@@ -1,5 +1,5 @@
 // Holds the latest samples of a continuous run in a fixed amount of memory.
-import type { SimResult } from "../core/sim";
+import type { McuState, SimResult } from "../core/sim";
 import type { LiveCommand } from "./worker";
 import { NO_WORKER, spawnWorker } from "./spawn";
 
@@ -57,7 +57,8 @@ export class LiveBuffer {
 
 export interface LiveCallbacks {
   onReady(names: string[], warnings: string[]): void;
-  onChunk(time: Float64Array, values: Float64Array[], simTime: number): void;
+  /** `debug` carries the watched microcontroller's state, and which device has halted the run, if any. */
+  onChunk(time: Float64Array, values: Float64Array[], simTime: number, debug?: { mcu?: McuState; halted?: string }): void;
   onFinished(): void;
   onError(message: string): void;
 }
@@ -77,7 +78,7 @@ export class LiveRun {
       if (data.type === "ready") {
         callbacks.onReady(data.names, data.warnings);
       } else if (data.type === "chunk") {
-        callbacks.onChunk(data.time, data.values, data.simTime);
+        callbacks.onChunk(data.time, data.values, data.simTime, { mcu: data.mcu, halted: data.halted });
         if (data.finished) {
           this.stop();
           callbacks.onFinished();
@@ -106,6 +107,11 @@ export class LiveRun {
 
   setStopAt(stopAt: number | undefined): void {
     if (!this.stopped) this.worker.postMessage({ type: "stopAt", stopAt } satisfies LiveCommand);
+  }
+
+  /** Debugger commands for a microcontroller; see the "debug" LiveCommand. */
+  debug(command: { device: string; watch?: boolean; breakpoints?: number[]; step?: boolean; resume?: boolean; pause?: boolean }): void {
+    if (!this.stopped) this.worker.postMessage({ type: "debug", ...command } satisfies LiveCommand);
   }
 
   /** Types bytes into a serial input of the running circuit. */

@@ -35,7 +35,12 @@ export type LiveCommand =
   /** Applies changed values to the running circuit, keeping its state. */
   | { type: "update"; id: number; netlist: string }
   /** Bytes typed into a serial input (a d_uart_tx instance), sent from the current simulated time. */
-  | { type: "send"; device: string; bytes: number[] };
+  | { type: "send"; device: string; bytes: number[] }
+  /**
+   * Debugger commands for a microcontroller: watch reports its state with each chunk, breakpoints replaces
+   * them, step stops it after one instruction, and resume (implied by step) lets a halted run go on.
+   */
+  | { type: "debug"; device: string; watch?: boolean; breakpoints?: number[]; step?: boolean; resume?: boolean; pause?: boolean };
 
 async function runJob({ id, netlist, request, plan, schematic }: WorkerJob): Promise<void> {
   try {
@@ -98,9 +103,18 @@ function liveFailed(error: unknown): void {
   self.postMessage({ type: "error", message: error instanceof Error ? error.message : String(error) });
 }
 
+/** The microcontroller a debugger window is showing, if any. */
+let debugDevice: string | undefined;
+/** True while a halted run has stopped asking for chunks, so a resume must restart it. */
+let haltedIdle = false;
+
 function step(): void {
   const live = session;
   if (!live) return;
+  if (live.halted) {
+    haltedIdle = true;
+    return;
+  }
   try {
     // A stop time moved to before where the run has got to ends it there, with nothing more to show.
     if (stopAt !== undefined && live.time >= stopAt * (1 - 1e-12)) {
@@ -135,7 +149,8 @@ function step(): void {
     const values = indices.map((i) => chunk.values[i]);
     const buffers = [chunk.time.buffer as ArrayBuffer, ...values.map((v) => v.buffer as ArrayBuffer)];
     const simTime = finished ? stopAt! : live.time;
-    (self as unknown as Worker).postMessage({ type: "chunk", time: chunk.time, values, simTime, finished }, buffers);
+    const mcu = debugDevice ? live.mcuState(debugDevice) : undefined;
+    (self as unknown as Worker).postMessage({ type: "chunk", time: chunk.time, values, simTime, finished, mcu, halted: live.halted }, buffers);
     if (finished) session = undefined;
   } catch (error) {
     liveFailed(error);
@@ -147,6 +162,8 @@ function runLive(message: LiveCommand): void {
     try {
       const started = createLiveSession(message.netlist);
       session = started;
+      haltedIdle = false;
+      debugDevice = undefined;
       const lower = started.names.map((n) => n.toLowerCase());
       const kept = message.keep.filter((name) => lower.includes(name));
       indices = kept.map((name) => lower.indexOf(name));
@@ -172,6 +189,23 @@ function runLive(message: LiveCommand): void {
     self.postMessage({ type: "updated", id: message.id, applied });
   } else if (message.type === "send") {
     session?.send(message.device, message.bytes);
+  } else if (message.type === "debug") {
+    const live = session;
+    if (!live) return;
+    if (message.watch !== undefined) debugDevice = message.watch ? message.device : undefined;
+    live.debug(message.device, { breakpoints: message.breakpoints, step: message.step || message.pause });
+    if (message.resume || message.step) {
+      live.resume();
+      setPace(rate);
+      if (haltedIdle) {
+        haltedIdle = false;
+        step();
+      }
+    } else if (live.halted && message.watch) {
+      // A window opened on a stopped run shows where it stopped.
+      const nothing = () => new Float64Array(0);
+      self.postMessage({ type: "chunk", time: nothing(), values: indices.map(nothing), simTime: live.time, finished: false, mcu: live.mcuState(message.device), halted: live.halted });
+    }
   } else {
     step();
   }
