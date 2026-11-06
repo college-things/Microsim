@@ -13,6 +13,7 @@ import { SchematicCanvas } from "./canvas";
 import { clearArea, createBode, createLogicAnalyzer, createSerialTerminal, createMultimeter, createScope, createWattmeter, floatingWindow, type InstrumentView, type RunData, type ScopeSettings, showWindow, tileWindows } from "./instruments";
 import { buildExample, EXAMPLES, type Example } from "../core/examples";
 import { resultToCsv, runsToCsv, schematicToSvg } from "../core/export";
+import { billOfMaterials, bomToCsv, bomToHtml, electricalRulesCheck, kicadNetlist } from "../core/reports";
 import { indicatorParts, indicatorVectors, readIndicator } from "../core/indicators";
 import { parseDeck } from "../core/deck";
 import { limitIssues, unsimulatedParts } from "../core/limits";
@@ -1765,6 +1766,42 @@ async function exportText(name: string, extension: string, contents: string): Pr
   }
 }
 
+function bomDialog(): void {
+  commitTypedValue();
+  const rows = billOfMaterials(doc.schematic);
+  dialog("Bill of materials", (box, close) => {
+    const table = el("div", { innerHTML: bomToHtml(rows) });
+    table.style.overflowX = "auto";
+    for (const cell of table.querySelectorAll<HTMLElement>("th, td")) {
+      cell.style.padding = "6px 12px";
+      cell.style.textAlign = "left";
+    }
+    const document = `<!doctype html><html lang="en"><meta charset="utf-8"><title>Bill of materials</title><style>body{font-family:sans-serif}table{border-collapse:collapse}th,td{padding:6px 12px;border:1px solid #ccc;text-align:left}</style><body>${bomToHtml(rows)}</body></html>`;
+    box.append(table, ...(!rows.length ? [el("p", { textContent: "There are no parts to include." })] : []),
+      el("div", { className: "dialog-actions" },
+        el("button", { textContent: "Export CSV...", onclick: () => void exportText(`${stem()}-bom.csv`, "csv", bomToCsv(rows)) }),
+        el("button", { textContent: "Export HTML...", onclick: () => void exportText(`${stem()}-bom.html`, "html", document) }),
+        el("button", { className: "primary", textContent: "Close", onclick: close })));
+  });
+}
+
+function ercDialog(): void {
+  commitTypedValue();
+  const findings = electricalRulesCheck(doc.schematic);
+  dialog("Electrical rules check", (box, close) => {
+    box.append(el("p", { textContent: findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"}. Click a finding to select its parts.` : "No electrical rule problems found." }));
+    const list = el("ul");
+    for (const finding of findings) {
+      const text = `${finding.severity === "error" ? "Error" : "Warning"}: ${finding.message}`;
+      list.append(el("li", {}, finding.componentIds.length ? el("button", {
+        textContent: text,
+        onclick: () => { close(); canvas.select(finding.componentIds); canvas.el.focus(); },
+      }) : el("span", { textContent: text })));
+    }
+    box.append(list, el("div", { className: "dialog-actions" }, el("button", { className: "primary", textContent: "Close", onclick: close })));
+  });
+}
+
 // Autosave protects against a crash or a forced quit. It's a recovery copy, not a save. Each tab
 // has its own, and holds a lock of the same name while it's open, so a copy whose lock is free
 // was left behind by a tab that has gone, and one whose lock is held isn't anyone's to claim.
@@ -2052,6 +2089,12 @@ const MENUS: Record<string, MenuItem[]> = {
     ["Export SPICE netlist", () => { commitTypedValue(); void exportText(`${stem()}.cir`, "cir", buildNetlist(doc.schematic).text); }],
   ],
   Examples: EXAMPLES.map((example): MenuItem => [example.name, () => void openExample(example)]),
+  Reports: [
+    ["Bill of materials...", bomDialog],
+    ["Electrical rules check...", ercDialog],
+    ["Export SPICE netlist...", () => { commitTypedValue(); void exportText(`${stem()}.cir`, "cir", buildNetlist(doc.schematic).text); }],
+    ["Export KiCad netlist...", () => { commitTypedValue(); void exportText(`${stem()}.net`, "net", kicadNetlist(doc.schematic)); }],
+  ],
   Design: [
     ["PCB layout...", () => design.pcb()],
     ["LabVIEW integration...", () => design.labview()],
