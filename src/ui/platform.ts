@@ -76,31 +76,32 @@ export interface NativeMenuItem {
   accelerator?: string;
 }
 
-/** Puts menus in the Mac menu bar. Returns false when not running in the desktop shell. */
+/**
+ * Puts menus in the window's native menu bar: the Mac menu bar, or the window's own on Windows and Linux.
+ * Returns false when not running in the desktop shell.
+ */
 export async function installNativeMenu(appName: string, menus: Record<string, NativeMenuItem[]>): Promise<boolean> {
   if (!isTauri()) return false;
   const { Menu, MenuItem, PredefinedMenuItem, Submenu } = await import("@tauri-apps/api/menu");
-  const app = await Submenu.new({
+  const mac = isMac();
+  // The standard Quit item is reported to skip close handling, which would lose unsaved work.
+  const close = async () => {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().close();
+  };
+  const submenus = [];
+  if (mac) submenus.push(await Submenu.new({
     text: appName,
     items: [
       await PredefinedMenuItem.new({ item: { About: null } }),
       await PredefinedMenuItem.new({ item: "Separator" }),
       await PredefinedMenuItem.new({ item: "Hide" }),
-      // The standard Quit item is reported to skip close handling, which would lose unsaved work.
-      await MenuItem.new({
-        text: `Quit ${appName}`,
-        accelerator: "CmdOrCtrl+Q",
-        action: async () => {
-          const { getCurrentWindow } = await import("@tauri-apps/api/window");
-          await getCurrentWindow().close();
-        },
-      }),
+      await MenuItem.new({ text: `Quit ${appName}`, accelerator: "CmdOrCtrl+Q", action: () => void close() }),
     ],
-  });
-  const submenus = [app];
+  }));
   for (const [text, entries] of Object.entries(menus)) {
     const items = [];
-    if (text === "Edit") {
+    if (text === "Edit" && mac) {
       // Mac text fields get copy, paste and undo only through these standard items. Actions
       // on the sheet reach the app through keydown and the copy, cut and paste events.
       for (const item of ["Undo", "Redo", "Cut", "Copy", "Paste", "SelectAll", "Separator"] as const) {
@@ -109,6 +110,11 @@ export async function installNativeMenu(appName: string, menus: Record<string, N
     }
     for (const entry of entries) {
       items.push(await MenuItem.new({ text: entry.label, accelerator: entry.accelerator, action: entry.action }));
+    }
+    // Windows and Linux end the File menu with Exit instead of a Mac app menu's Quit.
+    if (text === "File" && !mac) {
+      items.push(await PredefinedMenuItem.new({ item: "Separator" }));
+      items.push(await MenuItem.new({ text: "Exit", accelerator: "Ctrl+Q", action: () => void close() }));
     }
     submenus.push(await Submenu.new({ text, items }));
   }
