@@ -1,6 +1,6 @@
 // Original classic 12-clock MCS-51 interpreter, based on the published instruction set.
 // RAM and SFR spaces are separate: indirect addresses >= 0x80 never alias SFRs.
-const SP=0x81,DPL=0x82,DPH=0x83,PCON=0x87,TCON=0x88,SCON=0x98,SBUF=0x99,TMOD=0x89,TL0=0x8a,TH0=0x8c,IE=0xa8,IP=0xb8,PSW=0xd0,ACC=0xe0,B=0xf0;
+const T2CON=0xc8,RCAP2L=0xca,RCAP2H=0xcb,TL2=0xcc,TH2=0xcd,SP=0x81,DPL=0x82,DPH=0x83,PCON=0x87,TCON=0x88,SCON=0x98,SBUF=0x99,TMOD=0x89,TL0=0x8a,TH0=0x8c,IE=0xa8,IP=0xb8,PSW=0xd0,ACC=0xe0,B=0xf0;
 export class Mcs51 {
   readonly ram=new Uint8Array(256);
   readonly sfr=new Uint8Array(128);
@@ -9,6 +9,8 @@ export class Mcs51 {
   pc=0;cycles=0;
   private priority:number[]=[];
   private previousP3=255;
+  /** Port 1 pins last machine cycle, for timer 2's T2 (P1.0) and T2EX (P1.1) falling edges. */
+  private previousP1=255;
   private interruptDelay=0;
   /** Serial port state. `txFrame` holds the remaining output bits, LSB first; `tick16` counts the 16x baud clock. */
   private serial={txd:1,rxd:1,txFrame:[] as number[],txPending:undefined as number[]|undefined,txPhase:0,mode0Tx:0,rxActive:false,rxPhase:0,rxBits:[] as number[],mode0Rx:0,divider:0,previousRxd:1};
@@ -18,8 +20,8 @@ export class Mcs51 {
     if(!code.length||code.length>65536)throw new Error('8051: invalid code memory.');
     this.code=new Uint8Array(65536);this.code.fill(255);this.code.set(code);this.reset();
   }
-  reset(clearMemory=true){if(clearMemory){this.ram.fill(0);this.xram.fill(0);}this.sfr.fill(0);this.pc=0;this.cycles=0;this.priority=[];this.previousP3=255;this.interruptDelay=0;this.serial={txd:1,rxd:1,txFrame:[],txPending:undefined,txPhase:0,mode0Tx:0,rxActive:false,rxPhase:0,rxBits:[],mode0Rx:0,divider:0,previousRxd:1};this.sfr[SP-128]=7;for(let p=0;p<4;p++)this.sfr[p*16]=255;}
-  copyState(old:Mcs51){this.ram.set(old.ram);this.sfr.set(old.sfr);this.xram.set(old.xram);this.pc=old.pc;this.cycles=old.cycles;this.priority=[...old.priority];this.previousP3=old.previousP3;this.interruptDelay=old.interruptDelay;this.serial={...old.serial,txFrame:[...old.serial.txFrame],txPending:old.serial.txPending&&[...old.serial.txPending],rxBits:[...old.serial.rxBits]};this.transmitted=[...old.transmitted];}
+  reset(clearMemory=true){if(clearMemory){this.ram.fill(0);this.xram.fill(0);}this.sfr.fill(0);this.pc=0;this.cycles=0;this.priority=[];this.previousP3=255;this.previousP1=255;this.interruptDelay=0;this.serial={txd:1,rxd:1,txFrame:[],txPending:undefined,txPhase:0,mode0Tx:0,rxActive:false,rxPhase:0,rxBits:[],mode0Rx:0,divider:0,previousRxd:1};this.sfr[SP-128]=7;for(let p=0;p<4;p++)this.sfr[p*16]=255;}
+  copyState(old:Mcs51){this.ram.set(old.ram);this.sfr.set(old.sfr);this.xram.set(old.xram);this.pc=old.pc;this.cycles=old.cycles;this.priority=[...old.priority];this.previousP3=old.previousP3;this.previousP1=old.previousP1;this.interruptDelay=old.interruptDelay;this.serial={...old.serial,txFrame:[...old.serial.txFrame],txPending:old.serial.txPending&&[...old.serial.txPending],rxBits:[...old.serial.rxBits]};this.transmitted=[...old.transmitted];}
   latch(port:number){return this.sfr[port*16];}
   /** Port output after alternate functions: the serial port pulls RXD (P3.0) or TXD (P3.1) low while shifting. */
   output(port:number){const value=this.sfr[port*16];return port===3?value&(this.serial.rxd?255:254)&(this.serial.txd?255:253):value;}
@@ -83,9 +85,39 @@ export class Mcs51 {
         if(over){this.write(TCON,this.read(TCON,true)|flag);if(n===1)overflow1=true;}
       }
       if((mode&3)===3&&(this.read(TCON,true)&0x40)){const value=this.read(TH0)+1;this.write(TH0,value);if(value>255)this.write(TCON,this.read(TCON,true)|0x80);}
-      this.serialCycle(overflow1,p3);
+      this.serialCycle(overflow1,this.timer2(),p3);
     }
     this.cycles+=count;
+  }
+  /**
+   * 8052 timer 2 for one machine cycle; returns its overflows when it is the serial baud generator.
+   * T2CON: TF2 7, EXF2 6, RCLK 5, TCLK 4, EXEN2 3, TR2 2, C/T2 1, CP/RL2 0. In baud mode it counts at
+   * fosc/2 (six counts a machine cycle), reloads from RCAP2 without setting TF2, and T2EX only sets EXF2.
+   */
+  private timer2():number{
+    const p1=this.read(0x90),fall=this.previousP1&~p1;this.previousP1=p1;
+    let control=this.read(T2CON,true);
+    const baud=(control&0x30)!==0,capture=!baud&&(control&1)!==0;
+    let overflows=0;
+    if(control&4){
+      const counts=control&2?(fall&1?1:0):baud?6:1;
+      let value=(this.read(TH2)<<8)|this.read(TL2);
+      for(let k=0;k<counts;k++){
+        value++;
+        if(value>65535){
+          value=capture?0:(this.read(RCAP2H)<<8)|this.read(RCAP2L);
+          if(baud)overflows++;else control|=0x80;
+        }
+      }
+      this.write(TL2,value&255);this.write(TH2,value>>>8);
+    }
+    if((control&8)&&(fall&2)){
+      control|=0x40;
+      if(capture){this.write(RCAP2L,this.read(TL2));this.write(RCAP2H,this.read(TH2));}
+      else if(!baud){this.write(TL2,this.read(RCAP2L));this.write(TH2,this.read(RCAP2H));}
+    }
+    this.write(T2CON,control);
+    return overflows;
   }
   private transmit(value:number){
     this.transmitted.push(value);
@@ -101,7 +133,7 @@ export class Mcs51 {
    * One machine cycle of serial port activity. Modes 1-3 run from a 16x baud clock: timer-1 overflows
    * (divided by two unless SMOD) or fosc/4 (fosc/2 with SMOD) in mode 2. Mode 0 shifts once per machine cycle.
    */
-  private serialCycle(overflow1:boolean,p3:number){
+  private serialCycle(overflow1:boolean,overflow2:number,p3:number){
     const s=this.serial,control=this.read(SCON,true),mode=control>>>6,smod=(this.read(PCON,true)&128)!==0;
     if(mode===0){
       if(s.mode0Tx){s.rxd=s.txFrame[8-s.mode0Tx];s.txd=0;s.mode0Tx--;if(!s.mode0Tx){s.rxd=1;s.txd=1;this.write(SCON,this.read(SCON,true)|2);}return;}
@@ -110,16 +142,21 @@ export class Mcs51 {
       if((control&0x10)&&!(control&1)){s.mode0Rx=8;s.rxBits=[];}
       return;
     }
-    let ticks=0;
-    if(mode===2)ticks=smod?6:3;
-    else if(overflow1){if(smod)ticks=1;else{s.divider^=1;ticks=s.divider?0:1;}}
-    for(let t=0;t<ticks;t++){
-      s.txPhase=(s.txPhase+1)&15;
-      if(!s.txPhase){
-        if(s.txFrame.length){s.txFrame.shift();if(s.txFrame.length===1)this.write(SCON,this.read(SCON,true)|2);}
-        if(!s.txFrame.length&&s.txPending){s.txFrame=s.txPending;s.txPending=undefined;}
-        s.txd=s.txFrame.length?s.txFrame[0]:1;
+    // 16x clocks this cycle: timer 1 (halved unless SMOD), or timer 2 for TX with TCLK and for RX with RCLK.
+    let t1=0;
+    if(overflow1){if(smod)t1=1;else{s.divider^=1;t1=s.divider?0:1;}}
+    const t2con=this.read(T2CON,true);
+    const txTicks=mode===2?(smod?6:3):t2con&0x10?overflow2:t1,rxTicks=mode===2?(smod?6:3):t2con&0x20?overflow2:t1;
+    for(let t=0;t<Math.max(txTicks,rxTicks);t++){
+      if(t<txTicks){
+        s.txPhase=(s.txPhase+1)&15;
+        if(!s.txPhase){
+          if(s.txFrame.length){s.txFrame.shift();if(s.txFrame.length===1)this.write(SCON,this.read(SCON,true)|2);}
+          if(!s.txFrame.length&&s.txPending){s.txFrame=s.txPending;s.txPending=undefined;}
+          s.txd=s.txFrame.length?s.txFrame[0]:1;
+        }
       }
+      if(t>=rxTicks)continue;
       const rxd=p3&1;
       if(!s.rxActive){if((control&0x10)&&s.previousRxd&&!rxd){s.rxActive=true;s.rxPhase=0;s.rxBits=[];}}
       else if(++s.rxPhase===8){
@@ -135,10 +172,10 @@ export class Mcs51 {
   }
   private interrupt():boolean {
     const enabled=this.read(IE,true);if(!(enabled&128)||this.priority.at(-1)===1)return false;
-    const t=this.read(TCON,true),serial=this.read(0x98,true),pending=[t&2,t&32,t&8,t&128,serial&3],ip=this.read(IP,true);
+    const t=this.read(TCON,true),serial=this.read(0x98,true),pending=[t&2,t&32,t&8,t&128,serial&3,this.read(T2CON,true)&0xc0],ip=this.read(IP,true);
     for(const priority of [1,0]){
       if(this.priority.length&&priority<=this.priority[this.priority.length-1])continue;
-      for(let n=0;n<5;n++)if((enabled&(1<<n))&&pending[n]&&((ip>>>n)&1)===priority){
+      for(let n=0;n<6;n++)if((enabled&(1<<n))&&pending[n]&&((ip>>>n)&1)===priority){
         if(n===1)this.write(TCON,t&~32);if(n===3)this.write(TCON,t&~128);
         if(n===0&&(t&1))this.write(TCON,t&~2);if(n===2&&(t&4))this.write(TCON,t&~8);
         this.priority.push(priority);this.write(PCON,this.read(PCON)&~1);this.call(3+n*8);this.tick(2);return true;
