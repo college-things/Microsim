@@ -162,7 +162,17 @@ export interface FreeText {
   text: string;
 }
 
+export interface TitleBlock {
+  title?: string;
+  author?: string;
+  company?: string;
+  documentNumber?: string;
+  revision?: string;
+  date?: string;
+}
+
 export interface Schematic {
+  titleBlock?: TitleBlock;
   nativeMs14?: { xml: string; baseline: string };
   workspace?: import("./engineering").DesignWorkspace;
   name: string;

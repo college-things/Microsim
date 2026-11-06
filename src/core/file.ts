@@ -54,6 +54,13 @@ function graphic(g: unknown): void {
 function checkSchematic(s: unknown): Schematic {
   if (!isObj(s)) fail("no circuit");
   const doc = s as Record<string, unknown>;
+  if (doc.titleBlock !== undefined) {
+    if (!isObj(doc.titleBlock)) fail("title block");
+    const block = doc.titleBlock as Record<string, unknown>;
+    for (const key of ["title", "author", "company", "documentNumber", "revision", "date"]) {
+      if (block[key] !== undefined && !isStr(block[key])) fail("title block");
+    }
+  }
   if (doc.nativeMs14 !== undefined && (!isObj(doc.nativeMs14) || !isStr(doc.nativeMs14.xml) || !isStr(doc.nativeMs14.baseline))) fail("native ms14 data");
   if (doc.workspace !== undefined) validateWorkspace(doc.workspace);
   if (!isStr(doc.name) || !isStr(doc.definitions)) fail("name");

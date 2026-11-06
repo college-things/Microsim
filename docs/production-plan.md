@@ -40,7 +40,7 @@ Microsim will not be a 1:1 copy of Multisim. NI's component collection, LabVIEW 
 In order of how often Multisim users need them:
 
 1. [x] Reports: bill of materials, electrical rules check, netlist export.
-2. [ ] Printing and PDF export of the schematic with a title block.
+2. [x] Printing and PDF export of the schematic with a title block. File offers editable title fields, a single-sheet preview, A4/A3/US Letter/US Tabloid, either orientation, margins and fit or fixed scale. Print uses the browser/webview OS dialog; direct PDF export embeds a 300 dpi image. Native print dialogs still need hands-on checks on each platform.
 3. [ ] Hierarchical blocks, subcircuits and multi-page designs.
 4. [ ] Analyses: parameter, temperature and nested sweeps; Monte Carlo and worst case; Fourier and distortion.
 5. [ ] Instruments: frequency counter, word generator, logic converter, spectrum analyzer, IV analyzer, distortion analyzer, network analyzer.
