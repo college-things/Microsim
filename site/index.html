@@ -44,11 +44,11 @@
       <div class="grid">
         <article>
           <h3>A real circuit simulator</h3>
-          <p>A SPICE-style engine handles operating points, DC sweeps, AC, transient, noise, pole-zero, transfer function and sensitivity analyses, with diodes, transistors, op-amps and vendor SPICE models.</p>
+          <p>A SPICE-style engine runs operating point, DC sweep, AC, transient, noise, pole-zero, transfer function and sensitivity analyses. Parameter, temperature and nested sweeps, Monte Carlo, worst case, distortion and noise figure come on top.</p>
         </article>
         <article>
           <h3>Instruments that run live</h3>
-          <p>A two- and four-channel oscilloscope, multimeters, function generator, Bode plotter, wattmeter, logic analyzer and serial terminal update as the circuit runs.</p>
+          <p>Oscilloscopes, multimeters, a function generator, Bode plotter, wattmeter, logic analyzer and serial terminal update as the circuit runs. A frequency counter, spectrum analyzer, distortion analyzer, word generator, logic converter and IV curve tracer are also included.</p>
         </article>
         <article>
           <h3>Opens Multisim files</h3>
@@ -56,11 +56,11 @@
         </article>
         <article>
           <h3>Microcontrollers</h3>
-          <p>An 8051 core runs your program in the circuit, with timers, interrupts and a serial port. It has a built-in assembler and reads Intel HEX, and imported NI 8051 parts run on it. Type into the serial terminal and the chip answers.</p>
+          <p>An 8051 runs your program in the circuit, with its timers, interrupts and serial port, a 16x2 LCD and a keypad. Assemble your source in the app or load Intel HEX, then set breakpoints and step through it in the debugger.</p>
         </article>
         <article>
-          <h3>From schematic to board</h3>
-          <p>Lay out a two-layer PCB, check it, and export Gerber, drill and KiCad files. Optional links reach C, VHDL and FPGA toolchains you install.</p>
+          <h3>Parts, reports and boards</h3>
+          <p>Common transistors, diodes, op-amps, the 555, regulators and 74HC logic, with original models. Print to PDF with a title block, list a bill of materials, check electrical rules, and lay out a PCB with Gerber and KiCad export.</p>
         </article>
         <article>
           <h3>An assistant that knows the circuit</h3>
@@ -75,12 +75,16 @@
         <figcaption>A common-emitter amplifier, with live voltages on the wires.</figcaption>
       </figure>
       <figure class="shot">
-        <img src="img/serial-echo.png" width="1440" height="880" loading="lazy" alt="An 8051 microcontroller printing lines of text into the serial terminal.">
-        <figcaption>An 8051 program printing to the serial terminal.</figcaption>
+        <img src="img/lcd-keypad.png" width="1440" height="880" loading="lazy" alt="An 8051 reading a 4x4 keypad and showing the pressed key on a 16x2 LCD.">
+        <figcaption>An 8051 reading a keypad and writing to an LCD.</figcaption>
       </figure>
       <figure class="shot">
-        <img src="img/rectifier-light.png" width="1440" height="880" loading="lazy" alt="A full-wave rectifier in the light theme, with the oscilloscope showing the rectified output.">
-        <figcaption>A full-wave rectifier, in the light theme.</figcaption>
+        <img src="img/counter-spectrum.png" width="1440" height="880" loading="lazy" alt="A frequency counter reading 2 kHz at 25% duty, and a spectrum analyzer showing the harmonics of the square wave.">
+        <figcaption>The frequency counter and spectrum analyzer.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="img/blinker-555.png" width="1440" height="880" loading="lazy" alt="A 555 timer LED blinker in the light theme, with the oscilloscope showing its output and timing capacitor.">
+        <figcaption>A 555 LED blinker, in the light theme.</figcaption>
       </figure>
     </section>
 
@@ -123,7 +127,7 @@
       <p>Microsim is an independent program, not a copy of Multisim. It covers what most students and hobbyists use day to day, but not everything:</p>
       <ul>
         <li>Its own part library is small. Parts from an installed NI database can be imported, but NI's collection is not included.</li>
-        <li>PIC microcontrollers, LCD modules and keypads from Multisim circuits don't run yet.</li>
+        <li>PIC microcontrollers don't run yet, and LCD and keypad parts in Multisim circuits aren't converted (Microsim's own LCD and keypad work).</li>
         <li>There is no Ultiboard compatibility, and LabVIEW <code>.vi</code> files only run through an installed LabVIEW.</li>
         <li>Its results have not been systematically compared with Multisim's.</li>
       </ul>
