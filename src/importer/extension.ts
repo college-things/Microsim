@@ -1,4 +1,5 @@
-// Comments carry editor metadata without adding unknown native classes or huge attributes.
+// Comments carry the complete circuit document, including optional title-block fields,
+// without adding unknown native classes or huge attributes.
 export function encodeEditorExtension(text: string): string {
   const bytes = new TextEncoder().encode(text);
   const count = Math.max(1, Math.ceil(bytes.length / 32000));

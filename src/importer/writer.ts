@@ -262,6 +262,7 @@ export function serializeNativeMs14(file: CircuitFile): Uint8Array {
       for (const object of kids(child(symbol, "Objects"))) if (object.attrs.Class === "CIITSymTextCompValue" && object.children[0]) object.children[0].attrs.Output = str(c.params[c.valueKey]);
     }
   }
+  // Title-block edits are editor metadata; the complete document below preserves them.
   // XmlNode keeps raw attribute entities. Do not escape the entire attribute twice.
   const render = (node: XmlNode): string => `<${node.tag}${Object.entries(node.attrs).map(([k, v]) => ` ${k}="${v}"`).join("")}>${node.children.map(render).join("")}</${node.tag}>`;
   const text = `<?xml version="1.0" encoding="ASCII"?>\n${render(root).replace("</Project>", `${encodeEditorExtension(serializeCircuit(file))}</Project>`)}`;

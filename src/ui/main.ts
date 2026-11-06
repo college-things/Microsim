@@ -24,6 +24,8 @@ import { renderMarkdown } from "./markdown";
 import { formatSI, Plot, redrawPlots, seriesStyle, type Series } from "./plot";
 import { DesignUI } from "./design";
 import { serializeMs14 } from "../importer/writer";
+import { PAPER_SIZES, printPageToPdf, renderPrintPage, type PaperSize, type PrintOptions, type PrintPage } from "../core/print";
+import type { TitleBlock } from "../core/schematic";
 
 const FILE_EXTENSION = "microsim";
 /** What saved circuits were called before the app was renamed. They still open. */
@@ -1154,7 +1156,7 @@ function dialog(title: string, build: (body: HTMLElement, close: () => void) => 
     } else if (e.key === "Enter" && !e.isComposing && (e.target as HTMLElement).matches?.("input")) {
       e.preventDefault();
       box.querySelector<HTMLElement>(".dialog-actions .primary")?.click();
-    } else if (e.key === "F5" || ((e.metaKey || e.ctrlKey) && /^[os]$/i.test(e.key))) {
+    } else if (e.key === "F5" || ((e.metaKey || e.ctrlKey) && /^[ops]$/i.test(e.key))) {
       // The browser would reload, or open its own panels over the dialog.
       e.preventDefault();
     }
@@ -1576,6 +1578,102 @@ async function confirmDiscard(): Promise<boolean> {
 
 function stem(): string {
   return (doc.schematic.name || "Untitled").replace(/[\\/:*?"<>|]/g, "_");
+}
+
+function titleBlockDialog(): void {
+  commitTypedValue();
+  dialog("Title block", (box, close) => {
+    const fields: [keyof TitleBlock, string][] = [["title", "Title"], ["author", "Drawn by"], ["company", "Company"], ["documentNumber", "Document number"], ["revision", "Revision"], ["date", "Date"]];
+    const inputs = fields.map(([key, label]) => {
+      const input = el("input", { ariaLabel: label, value: doc.schematic.titleBlock?.[key] ?? "" });
+      box.append(el("label", { className: "field" }, label, input));
+      return [key, input] as const;
+    });
+    box.append(el("div", { className: "dialog-actions" },
+      el("button", { textContent: "Cancel", onclick: close }),
+      el("button", { className: "primary", textContent: "Save", onclick: () => {
+        const titleBlock: TitleBlock = {};
+        for (const [key, input] of inputs) if (input.value.trim()) titleBlock[key] = input.value.trim();
+        if (JSON.stringify(titleBlock) !== JSON.stringify(doc.schematic.titleBlock ?? {})) {
+          doc.checkpoint();
+          if (Object.keys(titleBlock).length) doc.schematic.titleBlock = titleBlock;
+          else delete doc.schematic.titleBlock;
+          doc.notify();
+        }
+        close();
+      } }),
+    ));
+  });
+}
+
+let printFrame: HTMLIFrameElement | undefined;
+function printPage(page: PrintPage): void {
+  printFrame?.remove();
+  const frame = el("iframe", { title: "Schematic print page" });
+  printFrame = frame;
+  // Keep a rendered browsing context: display:none prevents printing in some webviews.
+  frame.style.cssText = "position:fixed;left:-10000px;top:0;width:1px;height:1px;border:0";
+  frame.onload = async () => {
+    try {
+      const win = frame.contentWindow!;
+      await win.document.fonts.ready;
+      win.addEventListener("afterprint", () => { frame.remove(); if (printFrame === frame) printFrame = undefined; }, { once: true });
+      win.focus();
+      win.print();
+    } catch (error) { writeLog(`Could not print: ${friendly(error)}`, "error"); }
+  };
+  frame.srcdoc = `<!doctype html><html><head><title>Microsim</title><style>@page{size:${page.width}mm ${page.height}mm;margin:0}html,body{margin:0;padding:0;background:white}body>svg{display:block;width:${page.width}mm;height:${page.height}mm}</style></head><body>${page.svg}</body></html>`;
+  document.body.append(frame);
+}
+
+function printDialog(pdf = false): void {
+  commitTypedValue();
+  dialog(pdf ? "Export PDF" : "Print", (box, close) => {
+    box.style.width = "min(800px, 90vw)";
+    const select = (label: string, choices: string[]) => {
+      const input = el("select", { ariaLabel: label }, ...choices.map((choice) => el("option", { value: choice, textContent: choice })));
+      box.append(el("label", { className: "field" }, label, input));
+      return input;
+    };
+    const paper = select("Paper", Object.keys(PAPER_SIZES));
+    const orientation = select("Orientation", ["Portrait", "Landscape"]);
+    // Start in the orientation that fits the drawing, as most schematics are wider than tall.
+    const [, , drawnWidth, drawnHeight] = (/viewBox="([^"]+)"/.exec(schematicToSvg(doc.schematic))?.[1] ?? "0 0 1 1").split(" ").map(Number);
+    orientation.value = drawnWidth > drawnHeight ? "Landscape" : "Portrait";
+    const scale = select("Scale", ["Fit", "50%", "100%", "200%"]);
+    const margin = el("input", { type: "number", min: 0, step: 1, value: "10", ariaLabel: "Margins (mm)" });
+    box.append(el("label", { className: "field" }, "Margins (mm)", margin));
+    const preview = el("div");
+    preview.style.cssText = "height:35vh;overflow:auto;background:#ddd;text-align:center";
+    const message = el("p", { className: "muted" });
+    let page: PrintPage | undefined;
+    const submit = el("button", { className: "primary", textContent: pdf ? "Export PDF" : "Print", onclick: async () => {
+      if (!page) return;
+      if (!pdf) { printPage(page); close(); return; }
+      submit.disabled = true;
+      submit.textContent = "Exporting...";
+      try {
+        const bytes = await printPageToPdf(page);
+        const used = await saveFile(`${stem()}.pdf`, "pdf", bytes);
+        if (used) { statusText.textContent = isTauri() ? `Exported ${used}.` : `Download started: ${used}.`; close(); }
+      } catch (error) { writeLog(`Could not export PDF: ${friendly(error)}`, "error"); }
+      finally { submit.disabled = false; submit.textContent = "Export PDF"; }
+    } });
+    const update = () => {
+      try {
+        const options: PrintOptions = { paper: paper.value as PaperSize, orientation: orientation.value === "Portrait" ? "portrait" : "landscape", scale: scale.value === "Fit" ? "fit" : parseFloat(scale.value) / 100, margins: margin.value === "" ? NaN : Number(margin.value) };
+        page = renderPrintPage(doc.schematic, options);
+        preview.innerHTML = page.svg;
+        const svg = preview.querySelector("svg")!;
+        svg.style.cssText = "height:100%;width:auto;max-width:100%";
+        message.textContent = page.clipped ? "The schematic exceeds the drawing area and will be clipped. Choose Fit to include it all." : "One sheet. Fixed scale uses 96 schematic units per inch at 100%.";
+        submit.disabled = false;
+      } catch (error) { page = undefined; preview.replaceChildren(); message.textContent = friendly(error); submit.disabled = true; }
+    };
+    for (const input of [paper, orientation, scale, margin]) input.oninput = update;
+    box.append(preview, message, el("div", { className: "dialog-actions" }, el("button", { textContent: "Cancel", onclick: close }), submit));
+    update();
+  });
 }
 
 // Files
@@ -2084,6 +2182,9 @@ const MENUS: Record<string, MenuItem[]> = {
     ["Save as .ms14...", () => void saveCircuit(true, "ms14")],
     ["Export flattened .ms14...", () => void saveCircuit(true, "ms14", true)],
     ["Save as .microsim...", () => void saveCircuit(true, "microsim")],
+    ["Title block...", titleBlockDialog],
+    ["Print...", () => printDialog(), `${mod}+P`],
+    ["Export PDF...", () => printDialog(true)],
     // A native menu leaves focus in a field being typed in.
     ["Export schematic as SVG", () => { commitTypedValue(); void exportText(`${stem()}.svg`, "svg", schematicToSvg(doc.schematic)); }],
     ["Export SPICE netlist", () => { commitTypedValue(); void exportText(`${stem()}.cir`, "cir", buildNetlist(doc.schematic).text); }],
@@ -2350,6 +2451,7 @@ window.addEventListener("keydown", (e) => {
   const typing = target.matches?.("input, textarea, select") ?? false;
   const key = e.key.toLowerCase();
   if (command && key === "o") { e.preventDefault(); void openCircuit(); return; }
+  if (command && key === "p") { e.preventDefault(); printDialog(); return; }
   if (command && key === "s") { e.preventDefault(); void saveCircuit(e.shiftKey); return; }
   if (e.key === "F5") { e.preventDefault(); void simulateRun(); return; }
   if (e.key === "F6") { e.preventDefault(); analysesDialog(); return; }
