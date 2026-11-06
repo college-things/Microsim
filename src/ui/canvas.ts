@@ -896,6 +896,22 @@ export class SchematicCanvas {
   }
 
   private drawDisplay(ctx: CanvasRenderingContext2D, b: { x0: number; y0: number; x1: number; y1: number }, display: PartDisplay,comp:SchComponent): void {
+    if (display.lcd) {
+      // The character window, drawn in part coordinates so it turns with the part.
+      ctx.save();
+      ctx.translate(comp.x, comp.y);
+      ctx.rotate((comp.rotation * Math.PI) / 180);
+      if (comp.mirrored) ctx.scale(-1, 1);
+      ctx.fillStyle = "#9bbc0f";
+      ctx.fillRect(-96, -20, 192, 34);
+      ctx.fillStyle = "#0f380f";
+      ctx.font = "13px ui-monospace, Consolas, monospace";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      display.lcd.forEach((row, i) => ctx.fillText(row, -92, -11 + i * 16, 184));
+      ctx.restore();
+      return;
+    }
     if(display.machine){
       ctx.save();ctx.translate(comp.x,comp.y);ctx.rotate(comp.rotation*Math.PI/180);if(comp.mirrored)ctx.scale(-1,1);
       const fraction=display.machine.fraction;
