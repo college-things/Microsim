@@ -69,9 +69,9 @@ jobs:
           cat launched.txt running.txt >> launch.log
           # A living process or an empty desktop is insufficient evidence of a working app.
           grep -Eiq 'Microsim|Examples|Simulate|resistor' launched.txt
-          # The document name is in the window decoration, outside the client capture.
-          # These panels and their settled RMS readings verify the loaded RC example and run.
-          grep -Eiq 'Oscilloscope' running.txt
+          # Scope controls and settled RMS readings verify the loaded RC example and run.
+          # OCR can omit the bold scope heading when it segments the surrounding schematic.
+          grep -Eiq 'Time.?div' running.txt
           grep -Eiq 'Bode plotter' running.txt
           grep -Eq '707[.,][0-9].*rms' running.txt
           grep -Eq '(499|500)[.,][0-9].*rms' running.txt
