@@ -35,7 +35,7 @@ export function unsimulatedParts(doc: Schematic): string[] {
   });
   // A microcontroller that runs on the built-in core but has no program yet.
   for (const comp of doc.components) {
-    if (!(comp.kind === "mcu8051" || comp.params.mcu === "8051") || (comp.params.code ?? "").trim()) continue;
+    if (!(comp.kind === "mcu8051" || /^pic16f/.test(comp.kind) || comp.params.mcu === "8051" || comp.params.mcu === "pic16") || (comp.params.code ?? "").trim()) continue;
     const source = comp.params.sources ? ` (${comp.params.sources.split(";").join(" or ")})` : "";
     notices.push(`${comp.refDes || "A microcontroller"} has no program loaded${source}, so it does nothing. Load one with Design > Microcontroller program.`);
   }

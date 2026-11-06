@@ -1,4 +1,4 @@
-// Imported NI 8051-family microcontrollers run on Microsim's own 8051 core. Only the circuit file is read:
+// Imported NI microcontrollers run on Microsim's original 8051 or PIC16 core. Only the circuit file is read:
 // the part's model line gives its clock, and the file names the workspace whose source supplies the program.
 import type { ImportIssue, SchComponent } from "../core/schematic";
 
@@ -12,7 +12,13 @@ export function isMcu8051(comp: SchComponent): boolean {
   return comp.kind === "mcu8051" || comp.params.mcu === "8051";
 }
 
-const NI_MODEL = /\.model\s+\S+\s+d_cpu\s*\(([\s\S]*?)\)/i;
+export function isMcuPic(comp:SchComponent):boolean {return /^pic16f(?:84a|877a)$/.test(comp.kind)||comp.params.mcu==='pic16';}
+export function isMcu(comp:SchComponent):boolean {return isMcu8051(comp)||isMcuPic(comp);}
+export function picTemplate(ports:string[],reset:string,variant:string):string {
+  return `a{ref} [${ports.map(p=>`{pin:${p}}`).join(' ')}] {pin:${reset}} MCU_{ref}\n.model MCU_{ref} d_mcupic16(program="{param:code}" frequency={param:frequency} variant="${variant}" config={param:config})`;
+}
+
+const NI_MODEL = /\.model\s+\S+\s+d_cpu(?:pic)?\s*(?:\(([\s\S]*?)\)|([^\r\n]*))/i;
 
 /** Where the file says its MCU workspace and sources are. Paths are as written by NI, relative to the circuit. */
 export interface McuWorkspace {
@@ -30,8 +36,8 @@ export function readMcuWorkspace(xml: string): McuWorkspace {
 }
 
 /**
- * Rewrites NI `d_cpu` 8051/8052 parts to the built-in core, keeping their NI pins and symbol.
- * PIC parts stay as they are. The program starts empty: it is loaded from the workspace source.
+ * Rewrites supported NI MCU parts to the built-in cores, keeping their pins and symbol.
+ * PIC16F84/F877 parts use the PIC16 core. Programs start empty and are loaded from workspace source.
  */
 export function convertNiMcus(components: SchComponent[], xml: string, issues: ImportIssue[]): void {
   let workspace: McuWorkspace | undefined;
@@ -51,10 +57,26 @@ export function convertNiMcus(components: SchComponent[], xml: string, issues: I
     }
     const model = NI_MODEL.exec(comp.spice);
     if (!model) continue;
-    const args = model[1];
+    const args = model[1] ?? model[2];
     const part = /cpu_part_id\s*=\s*"?([\w]+)/i.exec(args)?.[1] ?? "";
     const named = /\.model\s+(\S+)/i.exec(model[0])?.[1] ?? "";
-    if (/pic/i.test(part + named)) continue;
+    if (/pic16/i.test(part)) {
+      const variant=/pic16f?877a?(?:$|_)/i.test(part)?'pic16f877a':/pic16f?84a?(?:$|_)/i.test(part)?'pic16f84a':undefined;
+      if(!variant){issues.push({severity:'warning',message:`${comp.refDes}: this PIC16 variant is not supported.`});continue;}
+      const widths=variant==='pic16f84a'?[5,8]:[6,8,8,8,3],ports:string[]=[];
+      for(let p=0;p<widths.length;p++)for(let b=0;b<widths[p];b++){
+        const pin=comp.pins.find(pin=>new RegExp(`^R${String.fromCharCode(65+p)}${b}(?![0-9])`,'i').test(pin.name));
+        if(pin)ports.push(pin.name);
+      }
+      const reset=comp.pins.find(p=>/MCLR/i.test(p.name))?.name;
+      if(!reset||ports.length!==widths.reduce((a,b)=>a+b,0)){issues.push({severity:'warning',message:`${comp.refDes}: this PIC16's port pins could not be matched, so it is not simulated.`});continue;}
+      const clock=Number(/clock_freq\s*=\s*([\d.eE+-]+)/.exec(args)?.[1]);
+      workspace??=readMcuWorkspace(xml);
+      comp.spice=picTemplate(ports,reset,variant);
+      comp.params={...comp.params,mcu:'pic16',variant,config:'-1',frequency:String(Number.isFinite(clock)&&clock>0?clock:4e6),code:'',...(workspace.workspace?{workspace:workspace.workspace}:{}),...(workspace.sources.length?{sources:workspace.sources.join(';')}:{})};
+      issues.push({severity:'info',message:`${comp.refDes}: NI ${part} converted to Microsim's PIC16 core. Load its workspace assembly source or Intel HEX with Design > Microcontroller program.`});
+      continue;
+    }
     if (!/mcs51|805|8051/i.test(part + named + (comp.displayValue ?? ""))) continue;
     const ports: string[] = [];
     for (let port = 0; port < 4; port++) for (let bit = 0; bit < 8; bit++) {
