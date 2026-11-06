@@ -1,8 +1,8 @@
 // Starter circuits, drawn for this app and built through the same API as the editor.
 import { Doc } from "./doc";
 import { assemble51 } from "../engine/asm51";
-import { emptySchematic, type BlockDefinition, type Schematic } from "./schematic";
-import { blockSymbol } from "./hierarchy";
+import type { SchComponent, Schematic } from "./schematic";
+import { pinWorld } from "./netlist";
 
 export interface Example {
   name: string;
@@ -542,30 +542,49 @@ EXAMPLES.push({
 EXAMPLES.push({
   name: "Two-page gain stages",
   build(doc) {
-    const blockDoc = new Doc();
-    const amp = blockDoc.addPart("opamp", 0, 0);
-    // An original ideal voltage gain stage, with explicit input, output and return.
-    amp.kind = "imported"; amp.refDes = "E1"; amp.params = {};
-    amp.graphics = [{ kind: "polygon", points: [{ x: -20, y: -20 }, { x: -20, y: 20 }, { x: 20, y: 0 }], filled: false }];
-    amp.spice = "E{ref} {pin:out} {pin:return} {pin:in} {pin:return} 2";
-    amp.pins = [{ name: "in", x: -30, y: 0, net: "IN" }, { name: "out", x: 30, y: 0, net: "OUT" }, { name: "return", x: 0, y: 30, net: "COM" }];
-    const block: BlockDefinition = { ...blockDoc.schematic, id: "gain-stage", name: "Gain stage (2 V/V)" };
-    for (const [i, name] of ["IN", "OUT", "COM"].entries()) block.components.push({ id: `gain-port-${i}`, refDes: `P${i + 1}`, kind: "hierarchy-port", x: -100, y: i * 60, rotation: 0, mirrored: false, params: { name }, displayValue: name, pins: [{ name: "port", x: 0, y: 0, net: name }], spice: "", graphics: [{ kind: "ellipse", cx: 0, cy: 0, rx: 4, ry: 4, filled: false }] });
+    const label = (d: Doc, comp: SchComponent, pin: string, net: string, dx: number) => {
+      const at = pinWorld(comp, comp.pins.find((p) => p.name === pin)!);
+      d.addWire([at, { x: at.x + dx, y: at.y }]);
+      // On the page being edited, which is not always page 1.
+      d.sheet.labels.push({ id: `label-${net}-${comp.id}`, x: at.x + dx, y: at.y, net });
+    };
+    // The block is drawn and wired as a person would: a non-inverting op-amp stage with a gain of 2.
+    // Its IN and OUT labels become the block's pins when it is made with Replace by hierarchical block.
+    const scratch = new Doc();
+    const amp = scratch.addPart("opamp", 0, 0);
+    const rf = scratch.addPart("resistor", 0, -90, { value: "10k" });
+    const rg = scratch.addPart("resistor", -80, 90, { value: "10k" });
+    rg.rotation = 90;
+    const stageGround = scratch.addPart("ground", -80, 200);
+    scratch.connectPins(amp, "-", rf, "1");
+    scratch.connectPins(rf, "2", amp, "out");
+    scratch.connectPins(amp, "-", rg, "1");
+    scratch.connectPins(rg, "2", stageGround, "g");
+    const inside = new Set([amp.id, rf.id, rg.id, stageGround.id, ...scratch.schematic.wires.map((w) => w.id)]);
+    label(scratch, amp, "+", "IN", -60);
+    label(scratch, amp, "out", "OUT", 60);
+    scratch.createBlock(inside, "Gain stage (2 V/V)");
+    const block = scratch.schematic.blocks![0];
+    block.id = "gain-stage";
     doc.schematic.blocks = [block];
-    const first = blockSymbol(block, "gain-first", "X1", 50, 0);
-    first.pins.forEach((p, i) => p.net = ["INPUT", "BETWEEN", "0"][i]);
-    doc.schematic.components.push(first);
+
+    // Page 1: a 1 V source into the first stage, with a meter on the link to page 2.
     const source = doc.addPart("vdc", -200, 0, { value: "1" });
-    source.pins[0].net = "INPUT"; source.pins[1].net = "0";
-    doc.addWire([{ x: -200, y: -30 }, { x: -200, y: -80 }, { x: -160, y: -80 }, { x: -160, y: -60 }, { x: -120, y: -60 }, { x: -120, y: -20 }, { x: 0, y: -20 }]);
-    doc.addWire([{ x: -200, y: 30 }, { x: -200, y: 80 }, { x: -160, y: 80 }, { x: -160, y: 60 }, { x: -120, y: 60 }, { x: -120, y: 20 }, { x: 0, y: 20 }]);
-    doc.schematic.labels.push({ id: "between-first", x: 0, y: 0, net: "BETWEEN" });
-    const second = blockSymbol(block, "gain-second", "X2", 50, 0);
-    second.pins.forEach((p, i) => p.net = ["BETWEEN", "OUTPUT", "0"][i]);
-    const page = emptySchematic("Second stage");
-    page.components.push(second);
-    page.labels.push({ id: "between-second", x: 0, y: -20, net: "BETWEEN" });
-    doc.schematic.pages = [page];
-    doc.schematic.texts.push({ id: "gain-note", x: -250, y: 100, text: "1 V input → 2 V between pages → 4 V output. Both instances share one gain-stage definition." });
+    const ground = doc.addPart("ground", -200, 140);
+    doc.connectPins(source, "n", ground, "g");
+    const first = doc.placeBlock("gain-stage", 0, 0);
+    doc.connectPins(source, "p", first, "IN");
+    const meter = doc.addPart("multimeter", 140, 100);
+    doc.connectPins(meter, "p", first, "OUT");
+    doc.connectPins(meter, "n", ground, "g");
+    label(doc, first, "OUT", "BETWEEN", 60);
+    doc.schematic.texts.push({ id: "gain-note", x: -220, y: 220, text: "1 V in, 2 V on BETWEEN, 4 V on OUTPUT (page 2). Double-click a block to open it." });
+
+    // Page 2: a second instance of the same block, joined to page 1 by the BETWEEN label.
+    doc.addPage("Second stage");
+    const second = doc.placeBlock("gain-stage", 0, 0);
+    label(doc, second, "IN", "BETWEEN", -60);
+    label(doc, second, "OUT", "OUTPUT", 60);
+    doc.openPage(0);
   },
 });

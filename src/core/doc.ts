@@ -291,7 +291,8 @@ export class Doc {
     for (const l of s.labels) add(netlist.namedNets.get(l.net), l, false);
     // Named pins may connect to another page or to global ground without a local outside part.
     for (const c of parts) for (const p of c.pins) if (p.net) add(netlist.pinNets.get(c.id)?.get(p.name), pinWorld(c, p), false);
-    const boundary = [...inside].filter(([net]) => outside.has(net));
+    // Ground is global, inside a block as everywhere else, so it never needs a pin.
+    const boundary = [...inside].filter(([net]) => outside.has(net) && net !== "0");
     const defaults = (net: string) => [...netlist.namedNets].find(([, n]) => n === net)?.[0] ?? net;
     const names = boundary.map(([net]) => (pinNames[net] ?? defaults(net)).trim());
     if (names.some((n) => !n) || new Set(names).size !== names.length) throw new Error("Give every port a different, nonempty name.");
@@ -310,8 +311,13 @@ export class Doc {
     s.components = s.components.filter((c) => !selection.has(c.id));
     s.wires = s.wires.filter((w) => !selection.has(w.id));
     s.components.push(instance);
+    const taken = new Set(circuitPages(this.schematic).flatMap((page) => page.labels.map((l) => l.net.toUpperCase())));
     boundary.forEach(([net], i) => {
-      const link = `${block.id}_${i}`;
+      // Keep a name the net already has; otherwise name it after the instance and port, such as X1_IN.
+      const named = [...netlist.namedNets].find(([, n]) => n === net)?.[0];
+      let link = named ?? `${instance.refDes}_${names[i]}`.replace(/[^\w]/g, "_");
+      for (let n = 2; !named && taken.has(link.toUpperCase()); n++) link = `${instance.refDes}_${names[i]}_${n}`.replace(/[^\w]/g, "_");
+      taken.add(link.toUpperCase());
       for (const at of [...(outside.get(net) ?? []), pinWorld(instance, instance.pins[i])]) s.labels.push({ id: newId("l"), x: at.x, y: at.y, net: link });
     });
     this.notify();

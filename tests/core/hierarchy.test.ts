@@ -1,6 +1,6 @@
+import { twoPageFixture } from "./hierarchy-fixture";
 import { describe, expect, it } from "vitest";
 import { Doc } from "../../src/core/doc";
-import { buildExample, EXAMPLES } from "../../src/core/examples";
 import { parseCircuit, serializeCircuit } from "../../src/core/file";
 import { flattenCircuit } from "../../src/core/hierarchy";
 import { buildNetlist, pinWorld } from "../../src/core/netlist";
@@ -17,7 +17,7 @@ import { op } from "../engine/helpers";
 const saved = (doc: Doc) => serializeCircuit({ schematic: doc.schematic, analyses: [], issues: [] });
 const gainCircuit = () => {
   const doc = new Doc();
-  doc.replace(buildExample(EXAMPLES.find((e) => e.name === "Two-page gain stages")!));
+  doc.replace(twoPageFixture());
   return doc;
 };
 function undoable(doc: Doc, change: () => void) {
@@ -242,5 +242,22 @@ describe("whole-circuit output", () => {
     expect(() => parseCircuit(saved(doc))).toThrow(/duplicate reference/);
     const bad = { ...emptySchematic(), pages: [{ name: "Missing arrays" }] };
     expect(() => parseCircuit(JSON.stringify(bad))).toThrow(/valid circuit/);
+  });
+});
+
+describe("the two-page example", () => {
+  it("gives 1 V in, 2 V between the pages and 4 V out, through drawn wires", async () => {
+    const { simulate } = await import("../../src/engine");
+    const { buildNetlist } = await import("../../src/core/netlist");
+    const { EXAMPLES, buildExample } = await import("../../src/core/examples");
+    const schematic = buildExample(EXAMPLES.find((e) => e.name === "Two-page gain stages")!);
+    const netlist = buildNetlist(schematic);
+    expect(netlist.warnings).toEqual([]);
+    const result = simulate(netlist.text, { type: "op" });
+    const v = (name: string) => result.vectors.find((x) => x.name.toLowerCase() === `v(${name})`)?.re[0];
+    expect(v("between")).toBeCloseTo(2, 3);
+    expect(v("output")).toBeCloseTo(4, 3);
+    // The block's own parts are joined by drawn wires, not only by hidden pin nets.
+    expect(schematic.blocks![0].wires.length).toBeGreaterThan(2);
   });
 });
